@@ -1,9 +1,12 @@
 import asyncio
+import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
 import structlog
+from fastapi import status
+from httpx import AsyncClient
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -1002,3 +1005,54 @@ async def test_notification_that_fails_is_not_claimed_again_in_the_same_run(
             for notification in await repository.list_for_alert(session, alert.id)
         ]
     assert attempts == [1, 1]
+
+
+async def test_alert_notifications_endpoint_shows_status_and_sent_time_by_day(
+    committed_session_factory: SessionFactory, client: AsyncClient
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    await _forecast(committed_session_factory, 80, day=_day(2))
+    await _evaluate(committed_session_factory)
+    await _notify(committed_session_factory, StubNotificationSender())
+    await _forecast(committed_session_factory, 60, day=_day(1))
+    await _evaluate(committed_session_factory)
+
+    response = await client.get(f"/alerts/{alert.id}/notifications")
+
+    assert response.status_code == status.HTTP_200_OK
+    pending, sent = response.json()
+    assert pending == {
+        "day": _day(1).isoformat(),
+        "probability": 60,
+        "threshold": 50,
+        "status": "pending",
+        "attempts": 0,
+        "sent_at": None,
+    }
+    assert {
+        key: sent[key] for key in ["day", "probability", "threshold", "status", "attempts"]
+    } == {
+        "day": _day(2).isoformat(),
+        "probability": 80,
+        "threshold": 50,
+        "status": "sent",
+        "attempts": 1,
+    }
+    assert datetime.fromisoformat(sent["sent_at"]) <= datetime.now(UTC)
+
+
+async def test_alert_without_notifications_lists_none(
+    committed_session_factory: SessionFactory, client: AsyncClient
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+
+    response = await client.get(f"/alerts/{alert.id}/notifications")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == []
+
+
+async def test_notifications_of_unknown_alert_returns_404(client: AsyncClient) -> None:
+    response = await client.get(f"/alerts/{uuid.uuid4()}/notifications")
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND

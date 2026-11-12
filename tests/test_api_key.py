@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from fastapi import FastAPI, status
 from httpx import AsyncClient
@@ -24,9 +26,10 @@ async def test_request_without_the_right_api_key_is_rejected_and_changes_nothing
                 f"/fields/{field['id']}/alerts",
                 json={"weather_event_type": "frost", "threshold": 70},
             ),
+            await intruder.get(f"/alerts/{uuid.uuid4()}/notifications"),
         ]
 
-    assert [r.status_code for r in responses] == [status.HTTP_401_UNAUTHORIZED] * 4
+    assert [r.status_code for r in responses] == [status.HTTP_401_UNAUTHORIZED] * 5
     assert (await client.get(f"/users/{user_id}")).status_code == status.HTTP_200_OK
     assert (await client.get(f"/fields/{field['id']}")).status_code == status.HTTP_200_OK
     assert (await client.get(f"/fields/{field['id']}/alerts")).json() == []

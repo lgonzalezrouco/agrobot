@@ -12,6 +12,7 @@ from agrobot.core.db import create_engine, create_session_factory
 from agrobot.core.errors import ConflictError, NotFoundError
 from agrobot.core.logging import configure_logging
 from agrobot.fields import router as fields
+from agrobot.notifications import router as notifications
 from agrobot.users import router as users
 
 
@@ -42,6 +43,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(ConflictError, _error_handler(status.HTTP_409_CONFLICT))
     app.include_router(health.router)
     guard = Depends(api_key_guard(settings.api_key))
-    for router in (users.router, fields.router, alerts.router):
+    for router in (users.router, fields.router, alerts.router, notifications.router):
         app.include_router(router, dependencies=[guard])
     return app

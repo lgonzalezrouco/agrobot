@@ -1,12 +1,14 @@
 import asyncio
 import uuid
 from collections import Counter
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from agrobot.core.errors import NotFoundError
 from agrobot.notifications import repository
 from agrobot.notifications.models import Notification, NotificationStatus
 from agrobot.notifications.sender import NotificationSender
@@ -16,6 +18,12 @@ logger = structlog.get_logger(__name__)
 
 async def delete_pending_for_field(session: AsyncSession, field_id: uuid.UUID) -> int:
     return await repository.delete_pending_for_field(session, field_id)
+
+
+async def list_for_alert(session: AsyncSession, alert_id: uuid.UUID) -> Sequence[Notification]:
+    if not await repository.alert_exists(session, alert_id):
+        raise NotFoundError("alert not found")
+    return await repository.list_for_alert(session, alert_id)
 
 
 async def evaluate(
