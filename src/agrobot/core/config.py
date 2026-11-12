@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     ingest_interval_seconds: float = Field(default=3600.0, gt=0)
     ingest_concurrency: int = Field(default=10, gt=0)
 
+    evaluate_interval_seconds: float = Field(default=300.0, gt=0)
+
+    notify_interval_seconds: float = Field(default=30.0, gt=0)
+    notify_batch_size: int = Field(default=100, gt=0)
+    notify_max_attempts: int = Field(default=5, gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:
