@@ -7,7 +7,7 @@ Agricultural management for farmers. This context covers weather alerts: warning
 ### Farms and weather
 
 **User**:
-A person who owns fields and receives notifications.
+A person who owns fields and receives notifications. A user is identified by their WhatsApp phone number.
 _Avoid_: Farmer, customer, account
 
 **Field**:
@@ -23,7 +23,7 @@ A kind of weather phenomenon the system forecasts, from a fixed set (frost, rain
 _Avoid_: Event, phenomenon, condition
 
 **Forecast**:
-The probability that a weather event type occurs at a location on a given future day.
+The probability that a weather event type occurs at a location on a given future day. Days follow the system's single local calendar, not UTC.
 _Avoid_: Weather data, prediction, reading
 
 **Weather Provider**:
@@ -41,5 +41,5 @@ The probability (0–100%) at or above which an alert fires.
 _Avoid_: Limit, trigger level
 
 **Notification**:
-The record created when a forecast for one day reaches an alert's threshold, which is then delivered to the user. An alert produces at most one notification per forecast day.
+The record created when a forecast for one day reaches an alert's threshold, which is then delivered to the user. An alert produces at most one notification per forecast day. Delivery keeps being retried until that day has passed; a notification still undelivered by then is expired.
 _Avoid_: Alert (for the fired instance), message, event
