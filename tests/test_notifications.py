@@ -933,7 +933,7 @@ async def test_notification_claimed_by_a_crashed_run_is_sent_once_its_lease_has_
     before = datetime.now(UTC)
     await _crash_while_sending(committed_session_factory, hanging, StubNotificationSender())
     after = datetime.now(UTC)
-    lease = timedelta(seconds=BATCH_SIZE * TIMEOUT_SECONDS)
+    lease = timedelta(seconds=2 * TIMEOUT_SECONDS)
     sender = StubNotificationSender()
 
     freeze_clock(monkeypatch, notifications, before + lease - timedelta(seconds=1))
