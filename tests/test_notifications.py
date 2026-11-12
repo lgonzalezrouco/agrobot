@@ -350,14 +350,12 @@ async def _notify(
     session_factory: SessionFactory,
     sender: StubNotificationSender,
     batch_size: int = 100,
-    max_attempts: int = 5,
     timeout_seconds: float = 10,
 ) -> None:
     await notifications.notify(
         session_factory,
         sender,
         batch_size=batch_size,
-        max_attempts=max_attempts,
         timeout_seconds=timeout_seconds,
         timezone=TIMEZONE,
     )
@@ -371,6 +369,10 @@ async def _update_notification(
             update(Notification).where(Notification.alert_id == alert.id).values(**values)
         )
         await session.commit()
+
+
+async def _make_due(session_factory: SessionFactory, alert: Alert, **values: object) -> None:
+    await _update_notification(session_factory, alert, next_attempt_at=datetime.now(UTC), **values)
 
 
 async def _status(session_factory: SessionFactory, alert: Alert) -> NotificationStatus:
@@ -498,37 +500,48 @@ async def test_retry_delay_doubles_per_attempt_up_to_one_hour(
 
     for _ in range(9):
         before = datetime.now(UTC)
-        await _notify(committed_session_factory, sender, max_attempts=10)
+        await _notify(committed_session_factory, sender)
         async with committed_session_factory() as session:
             [notification] = await repository.list_for_alert(session, alert.id)
         delays.append(round((notification.next_attempt_at - before).total_seconds()))
-        await _update_notification(
-            committed_session_factory, alert, next_attempt_at=datetime.now(UTC)
-        )
+        await _make_due(committed_session_factory, alert)
 
     assert delays == [30, 60, 120, 240, 480, 960, 1920, 3600, 3600]
 
 
-async def test_notification_fails_for_good_after_max_attempts(
+async def test_notification_keeps_retrying_past_many_failures_until_the_sender_recovers(
     committed_session_factory: SessionFactory,
 ) -> None:
     alert = await _pending(committed_session_factory)
     sender = StubNotificationSender()
     sender.failing.add("Lote")
-    for _ in range(2):
-        await _notify(committed_session_factory, sender, max_attempts=2)
-        await _update_notification(
-            committed_session_factory, alert, next_attempt_at=datetime.now(UTC)
-        )
+    failures = 8
+    for _ in range(failures):
+        await _notify(committed_session_factory, sender)
+        await _make_due(committed_session_factory, alert)
     sender.failing.clear()
 
-    await _notify(committed_session_factory, sender, max_attempts=2)
+    await _notify(committed_session_factory, sender)
 
     async with committed_session_factory() as session:
         [notification] = await repository.list_for_alert(session, alert.id)
-    assert notification.status == NotificationStatus.FAILED
-    assert notification.attempts == 2
-    assert sender.sent == []
+    assert notification.status == NotificationStatus.SENT
+    assert notification.attempts == failures + 1
+    assert len(sender.sent) == 1
+
+
+async def test_notification_that_keeps_failing_until_its_day_has_passed_expires(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory, day=_day(0))
+    sender = StubNotificationSender()
+    sender.failing.add("Lote")
+    await _notify(committed_session_factory, sender)
+    await _make_due(committed_session_factory, alert, day=_day(-1))
+
+    await _notify(committed_session_factory, sender)
+
+    assert await _status(committed_session_factory, alert) == NotificationStatus.EXPIRED
 
 
 async def test_failing_notifications_back_off_so_due_ones_still_go_out(
@@ -563,25 +576,23 @@ async def test_concurrent_runs_send_each_notification_once(
     assert len({phone_number for phone_number, _ in sender.sent}) == len(alerts)
 
 
-async def test_run_logs_how_many_notifications_were_sent_retried_and_failed(
+async def test_run_logs_how_many_notifications_were_sent_and_retried(
     committed_session_factory: SessionFactory,
 ) -> None:
     await _pending(committed_session_factory, latitude=1)
-    broken = [await _pending(committed_session_factory, latitude=n) for n in [2, 3, 4]]
+    broken = [await _pending(committed_session_factory, latitude=n) for n in [2, 3]]
     await _mark_broken(committed_session_factory, *broken)
-    await _update_notification(committed_session_factory, broken[0], attempts=1)
     sender = StubNotificationSender()
     sender.failing.add("Broken")
 
     with structlog.testing.capture_logs() as logs:
-        await _notify(committed_session_factory, sender, max_attempts=2)
+        await _notify(committed_session_factory, sender)
 
     assert {
         "event": "notifications.notified",
         "expired": 0,
         "sent": 1,
         "retried": 2,
-        "failed": 1,
         "log_level": "info",
     } in logs
 
@@ -682,7 +693,6 @@ async def test_past_day_notifications_do_not_take_batch_slots(
         "expired": 3,
         "sent": 1,
         "retried": 0,
-        "failed": 0,
         "log_level": "info",
     } in logs
 
@@ -737,7 +747,6 @@ async def test_notification_whose_day_ends_after_it_is_claimed_expires_instead_o
         "expired": 2,
         "sent": 0,
         "retried": 0,
-        "failed": 0,
         "log_level": "info",
     } in logs
 
