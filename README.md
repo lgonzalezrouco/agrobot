@@ -42,7 +42,8 @@ Quedó afuera a propósito:
 - Errores de envío permanentes: el estado `failed` existe pero nada lo usa
   ([ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
 - Cambiar la API key sin downtime ([ADR-0008](docs/adr/0008-the-api-is-internal-called-only-by-the-whatsapp-bot.md)).
-- Los adapters reales de WhatsApp y del Weather Provider: los workers usan fakes.
+- Los adapters reales de WhatsApp y del Weather Provider: los workers usan fakes
+  ([`docs/TASK.md`](docs/TASK.md) no pide integración con WhatsApp).
 
 ## Decisiones
 
