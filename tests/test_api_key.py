@@ -50,8 +50,11 @@ async def test_health_answers_without_api_key(app: FastAPI) -> None:
     assert response.status_code == status.HTTP_200_OK
 
 
-def test_settings_require_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("api_key", [None, ""])
+def test_settings_require_api_key(monkeypatch: pytest.MonkeyPatch, api_key: str | None) -> None:
     monkeypatch.delenv("API_KEY", raising=False)
+    if api_key is not None:
+        monkeypatch.setenv("API_KEY", api_key)
 
     with pytest.raises(ValidationError, match="api_key"):
         Settings(database_url="postgresql+asyncpg://unused/unused", _env_file=None)

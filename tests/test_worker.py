@@ -153,9 +153,13 @@ def test_notify_job_uses_the_fake_sender_and_notify_settings() -> None:
 @pytest.mark.parametrize("setting", ["notify_interval_seconds", "notify_batch_size"])
 @pytest.mark.parametrize("value", [0, -1])
 def test_notify_settings_must_be_positive(setting: str, value: int) -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=setting):
         Settings.model_validate(
-            {"database_url": "postgresql+asyncpg://unused/unused", setting: value}
+            {
+                "database_url": "postgresql+asyncpg://unused/unused",
+                "api_key": "unused",
+                setting: value,
+            }
         )
 
 
@@ -167,9 +171,13 @@ def test_notify_settings_default_to_30_seconds_and_100_per_batch() -> None:
 @pytest.mark.parametrize("setting", ["provider_timeout_seconds", "send_timeout_seconds"])
 @pytest.mark.parametrize("value", [0, -1])
 def test_timeouts_must_be_positive(setting: str, value: float) -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=setting):
         Settings.model_validate(
-            {"database_url": "postgresql+asyncpg://unused/unused", setting: value}
+            {
+                "database_url": "postgresql+asyncpg://unused/unused",
+                "api_key": "unused",
+                setting: value,
+            }
         )
 
 
