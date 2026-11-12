@@ -4,10 +4,12 @@ import signal
 from functools import partial
 
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agrobot.core.config import Settings
 from agrobot.forecasts.service import ingest
+from agrobot.notifications.service import evaluate
 from agrobot.worker.__main__ import JOBS, Jobs, main, parse_job
 from agrobot.worker.runner import PeriodicRunner
 
@@ -48,8 +50,9 @@ async def test_stop_interrupts_the_wait_between_iterations() -> None:
     await asyncio.wait_for(task, timeout=1)
 
 
-def test_ingest_is_a_known_job() -> None:
-    assert parse_job(["ingest"]) == "ingest"
+@pytest.mark.parametrize("job", ["ingest", "evaluate"])
+def test_known_jobs_are_accepted(job: str) -> None:
+    assert parse_job([job]) == job
 
 
 @pytest.mark.parametrize("argv", [[], ["bogus"]])
@@ -87,3 +90,26 @@ def test_ingest_job_uses_the_ingest_settings() -> None:
     assert isinstance(job, partial)
     assert job.func is ingest
     assert job.keywords == {"concurrency": 3}
+
+
+def test_evaluate_job_uses_the_evaluate_interval() -> None:
+    build_job, interval = JOBS["evaluate"]
+    settings = SETTINGS.model_copy(update={"evaluate_interval_seconds": 7})
+    session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker()
+
+    job = build_job(settings, session_factory)
+
+    assert interval(settings) == 7
+    assert isinstance(job, partial)
+    assert job.func is evaluate
+    assert job.args == (session_factory,)
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_evaluate_interval_must_be_positive(value: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings(database_url="postgresql+asyncpg://unused/unused", evaluate_interval_seconds=value)
+
+
+def test_evaluate_interval_defaults_to_5_minutes() -> None:
+    assert SETTINGS.evaluate_interval_seconds == 300

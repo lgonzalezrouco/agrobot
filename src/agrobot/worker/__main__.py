@@ -11,6 +11,7 @@ from agrobot.core.db import create_engine, create_session_factory
 from agrobot.core.logging import configure_logging
 from agrobot.forecasts.provider import FakeWeatherProvider
 from agrobot.forecasts.service import ingest
+from agrobot.notifications.service import evaluate
 from agrobot.worker.runner import Job, PeriodicRunner
 
 JobFactory = Callable[[Settings, async_sessionmaker[AsyncSession]], Job]
@@ -24,6 +25,10 @@ JOBS: Jobs = {
             ingest, session_factory, FakeWeatherProvider(), concurrency=settings.ingest_concurrency
         ),
         lambda settings: settings.ingest_interval_seconds,
+    ),
+    "evaluate": (
+        lambda _, session_factory: partial(evaluate, session_factory),
+        lambda settings: settings.evaluate_interval_seconds,
     ),
 }
 

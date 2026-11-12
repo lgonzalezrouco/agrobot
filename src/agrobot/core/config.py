@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     ingest_interval_seconds: float = Field(default=3600.0, gt=0)
     ingest_concurrency: int = Field(default=10, gt=0)
 
+    evaluate_interval_seconds: float = Field(default=300.0, gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:
