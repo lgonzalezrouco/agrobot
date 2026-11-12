@@ -33,7 +33,11 @@ JOBS: Jobs = {
     ),
     "notify": (
         lambda settings, session_factory: partial(
-            notify, session_factory, FakeNotificationSender(), batch_size=settings.notify_batch_size
+            notify,
+            session_factory,
+            FakeNotificationSender(),
+            batch_size=settings.notify_batch_size,
+            max_attempts=settings.notify_max_attempts,
         ),
         lambda settings: settings.notify_interval_seconds,
     ),

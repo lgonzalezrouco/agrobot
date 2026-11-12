@@ -1,11 +1,14 @@
 import enum
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agrobot.core.db import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+RETRY_BASE_DELAY_SECONDS = 30
+RETRY_MAX_DELAY_SECONDS = 3600
 
 
 class NotificationStatus(enum.StrEnum):
@@ -48,3 +51,10 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     def mark_sent(self) -> None:
         self.status = NotificationStatus.SENT
         self.sent_at = datetime.now(UTC)
+
+    def mark_send_failed(self, max_attempts: int) -> None:
+        if self.attempts >= max_attempts:
+            self.status = NotificationStatus.FAILED
+            return
+        delay = min(RETRY_BASE_DELAY_SECONDS * 2 ** (self.attempts - 1), RETRY_MAX_DELAY_SECONDS)
+        self.next_attempt_at = datetime.now(UTC) + timedelta(seconds=delay)

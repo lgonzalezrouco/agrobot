@@ -315,10 +315,35 @@ async def _pending(
     return alert
 
 
+async def _break(session_factory: SessionFactory, *alerts: Alert) -> None:
+    async with session_factory() as session:
+        await session.execute(
+            update(Field)
+            .where(Field.id.in_([alert.field_id for alert in alerts]))
+            .values(name="Broken")
+        )
+        await session.commit()
+
+
 async def _notify(
-    session_factory: SessionFactory, sender: StubNotificationSender, batch_size: int = 100
+    session_factory: SessionFactory,
+    sender: StubNotificationSender,
+    batch_size: int = 100,
+    max_attempts: int = 5,
 ) -> None:
-    await notifications.notify(session_factory, sender, batch_size=batch_size)
+    await notifications.notify(
+        session_factory, sender, batch_size=batch_size, max_attempts=max_attempts
+    )
+
+
+async def _make_due(session_factory: SessionFactory, alert: Alert) -> None:
+    async with session_factory() as session:
+        await session.execute(
+            update(Notification)
+            .where(Notification.alert_id == alert.id)
+            .values(next_attempt_at=datetime.now(UTC))
+        )
+        await session.commit()
 
 
 async def test_pending_notification_is_sent_to_the_users_phone(
@@ -366,18 +391,15 @@ async def test_notification_is_sent_even_if_its_alert_was_paused_after_it_fired(
     assert len(sender.sent) == 1
 
 
-async def test_failed_send_stays_pending_without_stopping_the_batch(
+async def test_failed_send_is_retried_later_without_stopping_the_batch(
     committed_session_factory: SessionFactory,
 ) -> None:
     failing = await _pending(committed_session_factory, day=_day(0), latitude=1)
     delivered = await _pending(committed_session_factory, day=_day(1), latitude=2)
-    async with committed_session_factory() as session:
-        await session.execute(
-            update(Field).where(Field.id == failing.field_id).values(name="Broken")
-        )
-        await session.commit()
+    await _break(committed_session_factory, failing)
     sender = StubNotificationSender()
     sender.failing.add("Broken")
+    before = datetime.now(UTC)
 
     await _notify(committed_session_factory, sender)
 
@@ -387,8 +409,66 @@ async def test_failed_send_stays_pending_without_stopping_the_batch(
     assert failed.status == NotificationStatus.PENDING
     assert failed.attempts == 1
     assert failed.sent_at is None
+    assert failed.next_attempt_at > before + timedelta(seconds=10)
     assert sent.status == NotificationStatus.SENT
     assert [content.field_name for _, content in sender.sent] == ["Lote"]
+
+
+async def test_retry_delay_doubles_per_attempt_up_to_one_hour(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory)
+    sender = StubNotificationSender()
+    sender.failing.add("Lote")
+    delays: list[int] = []
+
+    for _ in range(9):
+        before = datetime.now(UTC)
+        await _notify(committed_session_factory, sender, max_attempts=10)
+        async with committed_session_factory() as session:
+            [notification] = await repository.list_for_alert(session, alert.id)
+        delays.append(round((notification.next_attempt_at - before).total_seconds()))
+        await _make_due(committed_session_factory, alert)
+
+    assert delays == [30, 60, 120, 240, 480, 960, 1920, 3600, 3600]
+
+
+async def test_notification_fails_for_good_after_max_attempts(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory)
+    sender = StubNotificationSender()
+    sender.failing.add("Lote")
+    for _ in range(2):
+        await _notify(committed_session_factory, sender, max_attempts=2)
+        await _make_due(committed_session_factory, alert)
+    sender.failing.clear()
+
+    await _notify(committed_session_factory, sender, max_attempts=2)
+
+    async with committed_session_factory() as session:
+        [notification] = await repository.list_for_alert(session, alert.id)
+    assert notification.status == NotificationStatus.FAILED
+    assert notification.attempts == 2
+    assert sender.sent == []
+
+
+async def test_failing_notifications_back_off_so_due_ones_still_go_out(
+    committed_session_factory: SessionFactory,
+) -> None:
+    broken = [
+        await _pending(committed_session_factory, day=_day(0), latitude=latitude)
+        for latitude in [1, 2]
+    ]
+    await _pending(committed_session_factory, day=_day(1), latitude=3)
+    await _break(committed_session_factory, *broken)
+    sender = StubNotificationSender()
+    sender.failing.add("Broken")
+
+    await _notify(committed_session_factory, sender, batch_size=2)
+    await _notify(committed_session_factory, sender, batch_size=2)
+
+    assert [content.day for _, content in sender.sent] == [_day(1)]
 
 
 async def test_concurrent_runs_send_each_notification_once(
@@ -405,16 +485,30 @@ async def test_concurrent_runs_send_each_notification_once(
     assert len({phone_number for phone_number, _ in sender.sent}) == len(alerts)
 
 
-async def test_run_logs_how_many_notifications_were_sent(
+async def test_run_logs_how_many_notifications_were_sent_retried_and_failed(
     committed_session_factory: SessionFactory,
 ) -> None:
     await _pending(committed_session_factory, latitude=1)
-    await _pending(committed_session_factory, latitude=2)
+    broken = [await _pending(committed_session_factory, latitude=n) for n in [2, 3, 4]]
+    await _break(committed_session_factory, *broken)
+    async with committed_session_factory() as session:
+        await session.execute(
+            update(Notification).where(Notification.alert_id == broken[0].id).values(attempts=1)
+        )
+        await session.commit()
+    sender = StubNotificationSender()
+    sender.failing.add("Broken")
 
     with structlog.testing.capture_logs() as logs:
-        await _notify(committed_session_factory, StubNotificationSender())
+        await _notify(committed_session_factory, sender, max_attempts=2)
 
-    assert {"event": "notifications.sent", "sent": 2, "failed": 0, "log_level": "info"} in logs
+    assert {
+        "event": "notifications.sent",
+        "sent": 1,
+        "retried": 2,
+        "failed": 1,
+        "log_level": "info",
+    } in logs
 
 
 async def test_fake_sender_logs_the_content() -> None:
