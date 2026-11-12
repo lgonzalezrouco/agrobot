@@ -1,12 +1,17 @@
 import asyncio
 import os
 import signal
+from functools import partial
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from agrobot.core.config import Settings
-from agrobot.worker.__main__ import JOBS, main, parse_job
+from agrobot.forecasts.service import ingest
+from agrobot.worker.__main__ import JOBS, Jobs, main, parse_job
 from agrobot.worker.runner import PeriodicRunner
+
+SETTINGS = Settings(database_url="postgresql+asyncpg://unused/unused", log_level="WARNING")
 
 
 async def test_run_once_executes_the_job() -> None:
@@ -55,9 +60,7 @@ def test_unknown_or_missing_job_fails(argv: list[str]) -> None:
     assert exc_info.value.code == 2
 
 
-async def test_main_runs_the_job_named_on_the_command_line(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_main_runs_the_job_named_on_the_command_line() -> None:
     calls = 0
 
     async def stop_after_first_run() -> None:
@@ -65,9 +68,22 @@ async def test_main_runs_the_job_named_on_the_command_line(
         calls += 1
         os.kill(os.getpid(), signal.SIGTERM)
 
-    monkeypatch.setitem(JOBS, "fake", (lambda *_: stop_after_first_run, lambda _: 3600))
-    settings = Settings(database_url="postgresql+asyncpg://unused/unused", log_level="WARNING")
+    jobs: Jobs = {"fake": (lambda *_: stop_after_first_run, lambda _: 3600)}
+    handlers_before = [signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)]
 
-    await asyncio.wait_for(main(parse_job(["fake"]), settings), timeout=5)
+    await asyncio.wait_for(main(parse_job(["fake"], jobs), SETTINGS, jobs), timeout=5)
 
     assert calls == 1
+    assert [signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)] == handlers_before
+
+
+def test_ingest_job_uses_the_ingest_settings() -> None:
+    build_job, interval = JOBS["ingest"]
+    settings = SETTINGS.model_copy(update={"ingest_interval_seconds": 42, "ingest_concurrency": 3})
+
+    job = build_job(settings, async_sessionmaker())
+
+    assert interval(settings) == 42
+    assert isinstance(job, partial)
+    assert job.func is ingest
+    assert job.keywords == {"concurrency": 3}

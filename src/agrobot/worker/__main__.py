@@ -1,7 +1,7 @@
 import argparse
 import asyncio
 import signal
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -16,7 +16,9 @@ from agrobot.worker.runner import Job, PeriodicRunner
 JobFactory = Callable[[Settings, async_sessionmaker[AsyncSession]], Job]
 Interval = Callable[[Settings], float]
 
-JOBS: dict[str, tuple[JobFactory, Interval]] = {
+Jobs = Mapping[str, tuple[JobFactory, Interval]]
+
+JOBS: Jobs = {
     "ingest": (
         lambda settings, session_factory: partial(
             ingest, session_factory, FakeWeatherProvider(), concurrency=settings.ingest_concurrency
@@ -26,32 +28,33 @@ JOBS: dict[str, tuple[JobFactory, Interval]] = {
 }
 
 
-def parse_job(argv: Sequence[str] | None = None) -> str:
+def parse_job(argv: Sequence[str] | None = None, jobs: Jobs = JOBS) -> str:
     parser = argparse.ArgumentParser(prog="python -m agrobot.worker")
-    parser.add_argument("job", choices=JOBS)
+    parser.add_argument("job", choices=jobs)
     job: str = parser.parse_args(argv).job
     return job
 
 
-async def main(job: str, settings: Settings) -> None:
+async def main(job: str, settings: Settings, jobs: Jobs = JOBS) -> None:
     configure_logging(settings.log_level, json=settings.log_json)
 
     engine = create_engine(settings)
-    build_job, interval = JOBS[job]
+    build_job, interval = jobs[job]
     runner = PeriodicRunner(
         build_job(settings, create_session_factory(engine)), interval_seconds=interval(settings)
     )
 
     loop = asyncio.get_running_loop()
-    signals = (signal.SIGTERM, signal.SIGINT)
-    for sig in signals:
+    previous_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    for sig in previous_handlers:
         loop.add_signal_handler(sig, runner.stop)
 
     try:
         await runner.run()
     finally:
-        for sig in signals:
+        for sig, handler in previous_handlers.items():
             loop.remove_signal_handler(sig)
+            signal.signal(sig, handler)
         await engine.dispose()
 
 
