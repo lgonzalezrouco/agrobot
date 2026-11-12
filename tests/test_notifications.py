@@ -1,6 +1,5 @@
 import asyncio
 from datetime import UTC, date, datetime, timedelta
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,7 +19,7 @@ from agrobot.notifications.models import Notification, NotificationStatus
 from agrobot.notifications.sender import FakeNotificationSender, NotificationContent
 from agrobot.users.models import User
 from agrobot.weather import WeatherEventType
-from tests.conftest import TIMEZONE, create_field, freeze_clock, next_22h_in_buenos_aires
+from tests.conftest import TIMEZONE, create_field, freeze_clock, local_evening_after_utc_midnight
 
 SessionFactory = async_sessionmaker[AsyncSession]
 FROST = WeatherEventType.FROST
@@ -122,8 +121,7 @@ async def test_each_day_at_or_above_threshold_gets_its_own_notification_from_tod
 async def test_forecast_for_the_local_today_fires_after_utc_midnight(
     committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    instant = next_22h_in_buenos_aires()
-    local_today = instant.date() - timedelta(days=1)
+    instant, local_today = local_evening_after_utc_midnight()
     alert = await _create_alert(committed_session_factory, threshold=50)
     await _forecast(committed_session_factory, 70, day=local_today)
     freeze_clock(monkeypatch, notifications, instant)
@@ -644,8 +642,7 @@ async def test_pending_notification_for_a_past_day_expires_instead_of_being_sent
 async def test_notification_for_the_local_today_is_still_sent_after_utc_midnight(
     committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    instant = next_22h_in_buenos_aires()
-    local_today = instant.date() - timedelta(days=1)
+    instant, local_today = local_evening_after_utc_midnight()
     alert = await _pending(committed_session_factory, day=local_today)
     freeze_clock(monkeypatch, notifications, instant)
     sender = StubNotificationSender()
@@ -715,15 +712,13 @@ async def test_notification_whose_day_ends_after_it_is_claimed_expires_instead_o
         await _pending(committed_session_factory, day=_day(0), latitude=latitude)
         for latitude in [1, 2]
     ]
-    clock = [datetime.now(UTC)]
-    monkeypatch.setattr(
-        notifications, "datetime", SimpleNamespace(now=lambda tz: clock[0].astimezone(tz))
-    )
+    instant = datetime.now(UTC)
+    freeze_clock(monkeypatch, notifications, instant)
     claim_due = repository.claim_due
 
     async def claim_due_until_midnight(*args: Any) -> Any:
         claimed = await claim_due(*args)
-        clock[0] += timedelta(days=1)
+        freeze_clock(monkeypatch, notifications, instant + timedelta(days=1))
         return claimed
 
     monkeypatch.setattr(repository, "claim_due", claim_due_until_midnight)

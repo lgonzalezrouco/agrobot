@@ -8,12 +8,13 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from agrobot.core.config import Settings
+from agrobot.core.config import Settings, get_settings
 from agrobot.forecasts.service import ingest
 from agrobot.notifications.sender import FakeNotificationSender
 from agrobot.notifications.service import evaluate, notify
 from agrobot.worker.__main__ import JOBS, Jobs, main, parse_job
 from agrobot.worker.runner import PeriodicRunner
+from tests.conftest import TIMEZONE
 
 SETTINGS = Settings(database_url="postgresql+asyncpg://unused/unused", log_level="WARNING")
 
@@ -94,7 +95,7 @@ def test_ingest_job_uses_the_ingest_settings() -> None:
     assert job.keywords == {
         "concurrency": 3,
         "timeout_seconds": 10,
-        "timezone": ZoneInfo("America/Argentina/Buenos_Aires"),
+        "timezone": TIMEZONE,
     }
 
 
@@ -109,7 +110,7 @@ def test_evaluate_job_uses_the_evaluate_interval() -> None:
     assert isinstance(job, partial)
     assert job.func is evaluate
     assert job.args == (session_factory,)
-    assert job.keywords == {"timezone": ZoneInfo("America/Argentina/Buenos_Aires")}
+    assert job.keywords == {"timezone": TIMEZONE}
 
 
 @pytest.mark.parametrize("value", [0, -1])
@@ -140,7 +141,7 @@ def test_notify_job_uses_the_fake_sender_and_notify_settings() -> None:
         "batch_size": 4,
         "max_attempts": 3,
         "timeout_seconds": 10,
-        "timezone": ZoneInfo("America/Argentina/Buenos_Aires"),
+        "timezone": TIMEZONE,
     }
 
 
@@ -175,12 +176,22 @@ def test_timeouts_default_to_10_seconds() -> None:
     assert SETTINGS.send_timeout_seconds == 10
 
 
-def test_timezone_defaults_to_buenos_aires() -> None:
-    assert SETTINGS.timezone == ZoneInfo("America/Argentina/Buenos_Aires")
+def test_timezone_defaults_to_buenos_aires(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TIMEZONE", raising=False)
+
+    settings = Settings(database_url="postgresql+asyncpg://unused/unused", _env_file=None)
+
+    assert settings.timezone == ZoneInfo("America/Argentina/Buenos_Aires")
 
 
-def test_invalid_timezone_is_rejected() -> None:
+def test_invalid_timezone_env_var_fails_loading_startup_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://unused/unused")
+    monkeypatch.setenv("TIMEZONE", "Mars/Olympus_Mons")
+    get_settings.cache_clear()
+
     with pytest.raises(ValidationError, match="invalid timezone: Mars/Olympus_Mons"):
-        Settings.model_validate(
-            {"database_url": "postgresql+asyncpg://unused/unused", "timezone": "Mars/Olympus_Mons"}
-        )
+        get_settings()
+
+    get_settings.cache_clear()

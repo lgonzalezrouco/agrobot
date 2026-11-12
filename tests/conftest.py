@@ -1,6 +1,6 @@
 import uuid
 from collections.abc import AsyncIterator, Iterator
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -29,8 +29,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
 
 
-def next_22h_in_buenos_aires() -> datetime:
-    return datetime.combine(datetime.now(UTC).date() + timedelta(days=1), time(1), UTC)
+def local_evening_after_utc_midnight() -> tuple[datetime, date]:
+    instant = datetime.combine(datetime.now(UTC).date() + timedelta(days=1), time(1), UTC)
+    local_today = instant.astimezone(TIMEZONE).date()
+    assert local_today < instant.date()
+    return instant, local_today
 
 
 def freeze_clock(monkeypatch: pytest.MonkeyPatch, module: ModuleType, instant: datetime) -> None:

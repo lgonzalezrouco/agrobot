@@ -33,7 +33,7 @@ async def notify(
     sent = retried = failed = 0
     now = datetime.now(UTC)
     async with session_factory() as session:
-        expired = await repository.expire_past(session, now.astimezone(timezone).date())
+        expired = await repository.expire_past(session, datetime.now(timezone).date())
         await session.commit()
         claimed = await repository.claim_due(session, now, batch_size)
         today = datetime.now(timezone).date()

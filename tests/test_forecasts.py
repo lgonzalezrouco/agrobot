@@ -18,7 +18,7 @@ from agrobot.forecasts.provider import FakeWeatherProvider, ProviderForecast
 from agrobot.locations import service as locations
 from agrobot.locations.models import Location
 from agrobot.weather import WeatherEventType
-from tests.conftest import TIMEZONE, create_field, freeze_clock, next_22h_in_buenos_aires
+from tests.conftest import TIMEZONE, create_field, freeze_clock, local_evening_after_utc_midnight
 
 SessionFactory = async_sessionmaker[AsyncSession]
 FORECASTS_PER_RUN = len(WeatherEventType) * forecasts.HORIZON_DAYS
@@ -110,12 +110,11 @@ async def test_ingest_horizon_starts_at_the_local_today_after_utc_midnight(
     committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     location_id = await _create_field(committed_session_factory)
-    instant = next_22h_in_buenos_aires()
+    instant, local_today = local_evening_after_utc_midnight()
     freeze_clock(monkeypatch, forecasts, instant)
 
     await _ingest(committed_session_factory, StubWeatherProvider())
 
-    local_today = instant.date() - timedelta(days=1)
     assert {day for _, day in await _stored(committed_session_factory, location_id)} == {
         local_today + timedelta(days=offset) for offset in range(7)
     }
