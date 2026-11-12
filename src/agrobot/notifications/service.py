@@ -81,7 +81,7 @@ async def _deliver(
             outcome = NotificationStatus.PENDING
     async with session_factory() as session:
         notification = await session.get(Notification, claim.notification.id, with_for_update=True)
-        if notification is not None:
+        if notification is not None and notification.status == NotificationStatus.PENDING:
             if outcome == NotificationStatus.SENT:
                 notification.mark_sent()
             elif outcome == NotificationStatus.PENDING:

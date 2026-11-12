@@ -948,3 +948,20 @@ async def test_deleting_an_alert_while_its_notification_is_being_sent_does_not_w
 
     async with committed_session_factory() as session:
         assert await repository.list_for_alert(session, alert.id) == []
+
+
+async def test_notification_expired_by_another_run_while_being_sent_stays_expired(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory)
+    await _mark_broken(committed_session_factory, alert)
+    sender = StubNotificationSender()
+    sender.hanging.add("Broken")
+    run = asyncio.create_task(_notify(committed_session_factory, sender))
+    await sender.started.wait()
+
+    await _update_notification(committed_session_factory, alert, status=NotificationStatus.EXPIRED)
+    sender.released.set()
+    await run
+
+    assert await _status(committed_session_factory, alert) == NotificationStatus.EXPIRED
