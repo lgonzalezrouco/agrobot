@@ -16,7 +16,7 @@ from agrobot.worker.__main__ import JOBS, Jobs, main, parse_job
 from agrobot.worker.runner import PeriodicRunner
 from tests.conftest import TIMEZONE
 
-REQUIRED_SETTINGS = {"database_url": "postgresql+asyncpg://unused/unused", "api_key": "unused"}
+REQUIRED_SETTINGS = {"database_url": "postgresql+asyncpg://unused/unused"}
 SETTINGS = Settings.model_validate({**REQUIRED_SETTINGS, "log_level": "WARNING"})
 
 
@@ -170,7 +170,7 @@ def test_timeouts_default_to_10_seconds() -> None:
 def test_timezone_defaults_to_buenos_aires(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TIMEZONE", raising=False)
 
-    settings = Settings.model_validate(REQUIRED_SETTINGS)
+    settings = Settings(database_url=REQUIRED_SETTINGS["database_url"], _env_file=None)
 
     assert settings.timezone == ZoneInfo("America/Argentina/Buenos_Aires")
 

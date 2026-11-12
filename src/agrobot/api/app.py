@@ -24,6 +24,8 @@ def _error_handler(status_code: int) -> Callable[[Request, Exception], Awaitable
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    if settings.api_key is None:
+        raise RuntimeError("API_KEY is not set")
     configure_logging(settings.log_level, json=settings.log_json)
 
     @asynccontextmanager

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     log_json: bool = False
 
     database_url: str
-    api_key: SecretStr = Field(min_length=1)
+    api_key: SecretStr | None = Field(default=None, min_length=1)
 
     timezone: ZoneInfo = ZoneInfo("America/Argentina/Buenos_Aires")
 
