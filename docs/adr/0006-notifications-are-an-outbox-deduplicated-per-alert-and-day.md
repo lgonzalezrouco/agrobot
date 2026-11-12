@@ -6,6 +6,8 @@ To prevent starvation, each run of `notify` first marks pending Notifications fo
 
 An Alert produces at most one Notification per forecast day, enforced by a unique constraint on (alert, day). Evaluation inserts with `ON CONFLICT DO NOTHING`, so repeated or concurrent runs are idempotent. Later changes to that day's probability produce nothing: a rise from 55% to 90% is not reported, a drop below the Threshold is not reported, and neither is crossing the Threshold again. Editing a Threshold does not reset days that were already notified. Each Notification stores the probability and Threshold at the moment it fired, because the Forecast row keeps being overwritten by ingestion.
 
+When a Field's coordinates change so that it moves to another Location, the pending Notifications of its Alerts are deleted in the same transaction as the Field update. They were created from the old Location's Forecast and would warn about the wrong place. Sent, expired and failed Notifications are kept, so the one-per-Alert-and-day rule still holds for those days, and the next `evaluate` run fills only the days not yet notified from the new Location's Forecasts. Renaming a Field, or moving it within the same Location, deletes nothing.
+
 ## Considered Options
 
 - **A separate `outbox_messages` table** written alongside the Notification. Rejected: a Notification is already "a record that is then delivered", and nothing else publishes messages yet.

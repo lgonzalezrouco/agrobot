@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
@@ -10,6 +11,10 @@ from agrobot.notifications.models import Notification
 from agrobot.notifications.sender import NotificationContent, NotificationSender
 
 logger = structlog.get_logger(__name__)
+
+
+async def delete_pending_for_field(session: AsyncSession, field_id: uuid.UUID) -> int:
+    return await repository.delete_pending_for_field(session, field_id)
 
 
 async def evaluate(

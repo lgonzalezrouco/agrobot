@@ -8,6 +8,7 @@ from agrobot.core.errors import NotFoundError
 from agrobot.fields import repository
 from agrobot.fields.models import Field
 from agrobot.locations import service as locations
+from agrobot.notifications import service as notifications
 from agrobot.users import service as users
 
 logger = structlog.get_logger(__name__)
@@ -47,15 +48,24 @@ async def update(
     longitude: float | None,
 ) -> Field:
     field = await get(session, field_id)
+    dropped = 0
     if name is not None:
         field.name = name
     if latitude is not None or longitude is not None:
         field.latitude = field.latitude if latitude is None else latitude
         field.longitude = field.longitude if longitude is None else longitude
-        field.location = await locations.get_or_create(session, field.latitude, field.longitude)
+        location = await locations.get_or_create(session, field.latitude, field.longitude)
+        if location.id != field.location_id:
+            dropped = await notifications.delete_pending_for_field(session, field.id)
+        field.location = location
     await repository.save(session, field)
     await session.commit()
-    logger.info("fields.updated", field_id=field.id, location_id=field.location_id)
+    logger.info(
+        "fields.updated",
+        field_id=field.id,
+        location_id=field.location_id,
+        dropped_notifications=dropped,
+    )
     return field
 
 
