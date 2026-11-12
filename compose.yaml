@@ -1,5 +1,20 @@
 name: agrobot
 
+x-app: &app
+  build: .
+  environment:
+    DATABASE_URL: postgresql+asyncpg://agrobot:agrobot@db:5432/agrobot
+    API_KEY: ${API_KEY:-dev-api-key}
+    TIMEZONE: ${TIMEZONE:-America/Argentina/Buenos_Aires}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    INGEST_INTERVAL_SECONDS: ${INGEST_INTERVAL_SECONDS:-60}
+    EVALUATE_INTERVAL_SECONDS: ${EVALUATE_INTERVAL_SECONDS:-30}
+    NOTIFY_INTERVAL_SECONDS: ${NOTIFY_INTERVAL_SECONDS:-10}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  restart: unless-stopped
+
 services:
   db:
     image: postgres:18
@@ -16,6 +31,36 @@ services:
       interval: 2s
       timeout: 5s
       retries: 15
+
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *app
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ingest:
+    <<: *app
+    command: ["python", "-m", "agrobot.worker", "ingest"]
+
+  evaluate:
+    <<: *app
+    command: ["python", "-m", "agrobot.worker", "evaluate"]
+
+  notify:
+    <<: *app
+    command: ["python", "-m", "agrobot.worker", "notify"]
 
 volumes:
   pgdata:
