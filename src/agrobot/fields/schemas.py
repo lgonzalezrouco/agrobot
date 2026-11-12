@@ -1,9 +1,11 @@
 import uuid
 from datetime import datetime
-from typing import Annotated, Self
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 from pydantic import Field as PydanticField
+
+from agrobot.core.schemas import PatchModel
 
 Name = Annotated[str, PydanticField(min_length=1, max_length=200)]
 Latitude = Annotated[float, PydanticField(ge=-90, le=90)]
@@ -16,16 +18,10 @@ class FieldCreate(BaseModel):
     longitude: Longitude
 
 
-class FieldUpdate(BaseModel):
+class FieldUpdate(PatchModel):
     name: Name | None = None
     latitude: Latitude | None = None
     longitude: Longitude | None = None
-
-    @model_validator(mode="after")
-    def reject_nulls(self) -> Self:
-        if any(getattr(self, name) is None for name in self.model_fields_set):
-            raise ValueError("fields cannot be set to null")
-        return self
 
 
 class LocationRead(BaseModel):

@@ -44,6 +44,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["field_id"], ["fields.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("field_id", "weather_event_type"),
+        sa.CheckConstraint("threshold BETWEEN 0 AND 100", name="threshold_range"),
     )
 
 
