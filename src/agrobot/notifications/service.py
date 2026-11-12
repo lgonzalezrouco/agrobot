@@ -81,7 +81,7 @@ async def notify(
             claimed = await repository.claim_due(session, started_at, batch_size)
             leased_until = datetime.now(UTC) + lease
             for claim in claimed:
-                claim.notification.lease_until(leased_until)
+                claim.notification.next_attempt_at = leased_until
             await session.commit()
         today = datetime.now(timezone).date()
         outcomes.update(await asyncio.gather(*(deliver(claim, today) for claim in claimed)))
