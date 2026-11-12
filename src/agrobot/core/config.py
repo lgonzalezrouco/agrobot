@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     database_url: str
 
-    worker_interval_seconds: float = Field(default=60.0, gt=0)
+    ingest_interval_seconds: float = Field(default=3600.0, gt=0)
 
 
 @lru_cache
