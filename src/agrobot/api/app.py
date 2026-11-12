@@ -7,6 +7,7 @@ from agrobot.api import health
 from agrobot.core.config import Settings, get_settings
 from agrobot.core.db import create_engine, create_session_factory
 from agrobot.core.logging import configure_logging
+from agrobot.users import router as users
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -24,4 +25,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Agrobot", version="0.1.0", lifespan=lifespan)
     app.include_router(health.router)
+    app.include_router(users.router)
     return app
