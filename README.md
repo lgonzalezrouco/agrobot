@@ -30,10 +30,4 @@ migraciones reales y corren cada test en una transacción que se revierte al fin
 
 ## Decisiones
 
-- **Postgres real en los tests** (testcontainers) en lugar de SQLite: el comportamiento de la base
-  y las migraciones es el mismo que en producción.
-- **SQLAlchemy async + asyncpg**: la API y el worker comparten el mismo modelo y son async de punta
-  a punta.
-- **API y worker como procesos separados**: escalan y se despliegan de forma independiente.
-- **structlog**: logs legibles en local y JSON (`LOG_JSON=true`) para un agregador en producción.
-- **uv**: entorno y lockfile reproducibles con un solo comando.
+Las decisiones de diseño están registradas como ADRs en [`docs/adr/`](docs/adr/). El vocabulario del dominio está en [`GLOSSARY.md`](GLOSSARY.md).

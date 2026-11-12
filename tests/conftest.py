@@ -1,10 +1,11 @@
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from fastapi import FastAPI
+from fastapi import FastAPI, status
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -78,3 +79,26 @@ def app(settings: Settings, db_session: AsyncSession) -> FastAPI:
 async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
+
+
+async def register_user(client: AsyncClient, phone_number: str = "+5491122334455") -> str:
+    response = await client.post("/users", json={"name": "Ana", "phone_number": phone_number})
+    assert response.status_code == status.HTTP_201_CREATED
+    user_id: str = response.json()["id"]
+    return user_id
+
+
+async def register_field(
+    client: AsyncClient,
+    user_id: str,
+    latitude: float = 1,
+    longitude: float = 1,
+    name: str = "Lote 1",
+) -> dict[str, Any]:
+    response = await client.post(
+        f"/users/{user_id}/fields",
+        json={"name": name, "latitude": latitude, "longitude": longitude},
+    )
+    assert response.status_code == status.HTTP_201_CREATED
+    body: dict[str, Any] = response.json()
+    return body
