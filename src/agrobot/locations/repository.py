@@ -8,7 +8,6 @@ from agrobot.locations.models import Location
 
 
 async def get_or_create(session: AsyncSession, latitude: Decimal, longitude: Decimal) -> Location:
-    # ON CONFLICT waits for a concurrent insert of the same point instead of failing.
     await session.execute(
         insert(Location).values(latitude=latitude, longitude=longitude).on_conflict_do_nothing()
     )

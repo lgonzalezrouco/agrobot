@@ -236,12 +236,11 @@ async def test_deleting_a_user_deletes_their_fields(client: AsyncClient) -> None
 
 
 async def test_concurrent_registrations_share_one_location(engine: AsyncEngine) -> None:
-    # Not through HTTP: the client shares one session, and this needs two real transactions.
     async with AsyncSession(engine) as first, AsyncSession(engine) as second:
         created_id = (await locations.get_or_create(first, 45.01, 45.01)).id
         try:
             racing = asyncio.create_task(locations.get_or_create(second, 45.02, 44.98))
-            await asyncio.sleep(0.2)  # let the second insert block on the first's uncommitted row
+            await asyncio.sleep(0.2)
             await first.commit()
 
             assert (await racing).id == created_id
