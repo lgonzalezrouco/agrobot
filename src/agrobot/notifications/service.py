@@ -51,7 +51,7 @@ async def notify(
     timezone: ZoneInfo,
 ) -> None:
     started_at = datetime.now(UTC)
-    lease = timedelta(seconds=batch_size * timeout_seconds)
+    lease = timedelta(seconds=2 * timeout_seconds)
     outcomes: Counter[str] = Counter()
     async with session_factory() as session:
         outcomes["expired"] = await repository.expire_past(session, datetime.now(timezone).date())
