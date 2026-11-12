@@ -53,6 +53,9 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         self.status = NotificationStatus.SENT
         self.sent_at = datetime.now(UTC)
 
+    def mark_expired(self) -> None:
+        self.status = NotificationStatus.EXPIRED
+
     def mark_send_failed(self, max_attempts: int) -> bool:
         self.attempts += 1
         if self.attempts >= max_attempts:

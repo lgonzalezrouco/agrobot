@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 import structlog
@@ -346,6 +347,12 @@ async def _update_notification(
         await session.commit()
 
 
+async def _status(session_factory: SessionFactory, alert: Alert) -> NotificationStatus:
+    async with session_factory() as session:
+        [notification] = await repository.list_for_alert(session, alert.id)
+    return notification.status
+
+
 async def test_pending_notification_is_sent_to_the_users_phone(
     committed_session_factory: SessionFactory,
 ) -> None:
@@ -393,10 +400,8 @@ async def test_within_a_day_the_longest_waiting_notification_is_claimed_first(
 
     await _notify(committed_session_factory, StubNotificationSender(), batch_size=1)
 
-    async with committed_session_factory() as session:
-        [first] = await repository.list_for_alert(session, waiting.id)
-        [second] = await repository.list_for_alert(session, recent.id)
-    assert (first.status, second.status) == (NotificationStatus.SENT, NotificationStatus.PENDING)
+    assert await _status(committed_session_factory, waiting) == NotificationStatus.SENT
+    assert await _status(committed_session_factory, recent) == NotificationStatus.PENDING
 
 
 async def test_notification_is_sent_even_if_its_alert_was_paused_after_it_fired(
@@ -571,12 +576,6 @@ async def test_run_skips_a_notification_locked_by_another_run_without_waiting(
     assert [content.day for _, content in sender.sent] == [_day(1)]
 
 
-async def _status(session_factory: SessionFactory, alert: Alert) -> NotificationStatus:
-    async with session_factory() as session:
-        [notification] = await repository.list_for_alert(session, alert.id)
-    return notification.status
-
-
 async def test_pending_notification_for_a_past_day_expires_instead_of_being_sent(
     committed_session_factory: SessionFactory,
 ) -> None:
@@ -618,6 +617,59 @@ async def test_past_day_notifications_do_not_take_batch_slots(
     assert {
         "event": "notifications.notified",
         "expired": 3,
+        "sent": 1,
+        "retried": 0,
+        "failed": 0,
+        "log_level": "info",
+    } in logs
+
+
+async def test_expiry_skips_a_notification_locked_by_another_run_without_waiting(
+    committed_session_factory: SessionFactory,
+) -> None:
+    locked = await _pending(committed_session_factory, day=_day(-1), latitude=1)
+    unlocked = await _pending(committed_session_factory, day=_day(-1), latitude=2)
+
+    async with committed_session_factory() as other_run:
+        await other_run.execute(
+            select(Notification).where(Notification.alert_id == locked.id).with_for_update()
+        )
+        await asyncio.wait_for(
+            _notify(committed_session_factory, StubNotificationSender()), timeout=5
+        )
+
+    assert await _status(committed_session_factory, locked) == NotificationStatus.PENDING
+    assert await _status(committed_session_factory, unlocked) == NotificationStatus.EXPIRED
+
+
+async def test_notification_whose_day_ends_during_the_run_expires_instead_of_being_sent(
+    committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alerts = [
+        await _pending(committed_session_factory, day=_day(0), latitude=latitude)
+        for latitude in [1, 2]
+    ]
+    clock = [datetime.now(UTC)]
+    monkeypatch.setattr(notifications, "datetime", SimpleNamespace(now=lambda tz: clock[0]))
+
+    class MidnightSender(StubNotificationSender):
+        async def send(self, phone_number: str, content: NotificationContent) -> None:
+            await super().send(phone_number, content)
+            clock[0] += timedelta(days=1)
+
+    sender = MidnightSender()
+
+    with structlog.testing.capture_logs() as logs:
+        await _notify(committed_session_factory, sender)
+
+    assert len(sender.sent) == 1
+    assert sorted([await _status(committed_session_factory, alert) for alert in alerts]) == [
+        NotificationStatus.EXPIRED,
+        NotificationStatus.SENT,
+    ]
+    assert {
+        "event": "notifications.notified",
+        "expired": 1,
         "sent": 1,
         "retried": 0,
         "failed": 0,

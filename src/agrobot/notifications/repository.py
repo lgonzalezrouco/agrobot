@@ -45,7 +45,13 @@ async def create_due(session: AsyncSession, today: date) -> int:
 async def expire_past(session: AsyncSession, today: date) -> int:
     result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
         update(Notification)
-        .where(Notification.status == NotificationStatus.PENDING, Notification.day < today)
+        .where(
+            Notification.id.in_(
+                select(Notification.id)
+                .where(Notification.status == NotificationStatus.PENDING, Notification.day < today)
+                .with_for_update(skip_locked=True)
+            )
+        )
         .values(status=NotificationStatus.EXPIRED)
     )
     return result.rowcount
