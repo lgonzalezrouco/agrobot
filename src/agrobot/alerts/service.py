@@ -7,13 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agrobot.alerts import repository
 from agrobot.alerts.models import Alert
-from agrobot.core.errors import ConflictError, NotFoundError
+from agrobot.core.errors import FOREIGN_KEY_VIOLATION, ConflictError, NotFoundError
 from agrobot.fields import service as fields
 from agrobot.weather import WeatherEventType
 
 logger = structlog.get_logger(__name__)
-
-FOREIGN_KEY_VIOLATION = "23503"
 
 
 async def configure(

@@ -2,9 +2,10 @@ import uuid
 from collections.abc import Sequence
 
 import structlog
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agrobot.core.errors import NotFoundError
+from agrobot.core.errors import FOREIGN_KEY_VIOLATION, NotFoundError
 from agrobot.fields import repository
 from agrobot.fields.models import Field
 from agrobot.locations import service as locations
@@ -22,7 +23,13 @@ async def register(
     field = Field(
         user_id=user_id, name=name, latitude=latitude, longitude=longitude, location=location
     )
-    await repository.save(session, field)
+    try:
+        await repository.save(session, field)
+    except IntegrityError as exc:
+        await session.rollback()
+        if getattr(exc.orig, "sqlstate", None) == FOREIGN_KEY_VIOLATION:
+            raise NotFoundError("user not found") from exc
+        raise
     await session.commit()
     logger.info("fields.registered", field_id=field.id, location_id=location.id)
     return field

@@ -7,8 +7,12 @@ from httpx import AsyncClient
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from agrobot.core.errors import NotFoundError
+from agrobot.fields import service as fields
 from agrobot.locations import service as locations
 from agrobot.locations.models import Location
+from agrobot.users import service as users
+from agrobot.users.models import User
 from tests.conftest import register_field, register_user
 
 
@@ -239,3 +243,25 @@ async def test_concurrent_registrations_share_one_location(engine: AsyncEngine) 
             await second.rollback()
             await first.execute(delete(Location).where(Location.id == created_id))
             await first.commit()
+
+
+async def test_register_field_for_a_user_deleted_concurrently_raises_not_found(
+    engine: AsyncEngine,
+) -> None:
+    async with AsyncSession(engine, expire_on_commit=False) as setup:
+        user = await users.register(setup, "Ana", "+5491100000002")
+    async with AsyncSession(engine) as deleter, AsyncSession(engine) as registerer:
+        try:
+            await deleter.execute(delete(User).where(User.id == user.id))
+            racing = asyncio.create_task(
+                fields.register(registerer, user.id, "Lote 1", 47.01, 47.01)
+            )
+            await asyncio.sleep(0.2)
+            await deleter.commit()
+
+            with pytest.raises(NotFoundError):
+                await racing
+        finally:
+            await registerer.rollback()
+            await deleter.execute(delete(User).where(User.id == user.id))
+            await deleter.commit()

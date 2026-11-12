@@ -106,5 +106,5 @@ async def claim_due(
                 notification.threshold,
             ),
         )
-        for notification, phone_number, field_name, weather_event_type in rows.tuples()
+        for notification, phone_number, field_name, weather_event_type in rows
     ]
