@@ -1,38 +1,53 @@
 # Agrobot
 
-Sistema de alertas climáticas: API REST y worker en background sobre PostgreSQL. El enunciado está
-en [`docs/TASK.md`](docs/TASK.md).
+Weather alert system: a REST API and background workers on PostgreSQL. The original task statement
+(in Spanish) is in [`docs/TASK.md`](docs/TASK.md).
 
-## Cómo correrlo
+## Run it
 
-Requisitos: [uv](https://docs.astral.sh/uv/) y Docker.
+Requires Docker.
+
+```bash
+docker compose up --build
+```
+
+This starts Postgres, applies the migrations, and runs the API plus the `ingest`, `evaluate` and
+`notify` workers, each in its own container. No `.env` is needed.
+
+- API docs: http://localhost:8000/docs
+- Every endpoint except `/health` requires the `X-API-Key` header. The default key is
+  `dev-api-key`; in `/docs`, set it with the *Authorize* button.
+
+The weather provider and the WhatsApp sender are fakes, so nothing calls a third-party service. In
+Compose the workers run every minute or less so alerts show up quickly; set
+`INGEST_INTERVAL_SECONDS`, `EVALUATE_INTERVAL_SECONDS` or `NOTIFY_INTERVAL_SECONDS` to change that.
+If port 8000 or 5432 is taken, set `API_PORT` or `POSTGRES_PORT`.
+
+## Run it without Docker for the app
+
+Requires [uv](https://docs.astral.sh/uv/) and Docker for the database.
 
 ```bash
 cp .env.example .env
 docker compose up -d --wait db
 uv run alembic upgrade head
-uv run uvicorn --factory agrobot.api.app:create_app    # API en http://localhost:8000/docs
-uv run python -m agrobot.worker ingest                 # cada worker en su propia terminal
+uv run uvicorn --factory agrobot.api.app:create_app    # API at http://localhost:8000/docs
+uv run python -m agrobot.worker ingest                 # each worker in its own terminal
 uv run python -m agrobot.worker evaluate
 uv run python -m agrobot.worker notify
 ```
 
-Todos los endpoints salvo `/health` piden el header `X-API-Key` con el valor de `API_KEY` de `.env`.
-En `/docs` se carga con el botón *Authorize*.
-
-`uv run` instala las dependencias la primera vez. Si el puerto 5432 está ocupado, cambiá
-`POSTGRES_PORT` y el puerto de `DATABASE_URL` en `.env`.
-
-## Cómo verificarlo
+## Test it
 
 ```bash
 uv run pytest
 curl localhost:8000/health   # {"status":"ok","database":"ok"}
 ```
 
-Los tests levantan su propio Postgres con testcontainers (sólo necesitan Docker), aplican las
-migraciones reales y corren cada test en una transacción que se revierte al final.
+The tests start their own Postgres with testcontainers (they only need Docker), apply the real
+migrations, and run each test in a transaction that is rolled back at the end.
 
-## Decisiones
+## Decisions
 
-Las decisiones de diseño están registradas como ADRs en [`docs/adr/`](docs/adr/). El vocabulario del dominio está en [`GLOSSARY.md`](GLOSSARY.md).
+Design decisions are recorded as ADRs in [`docs/adr/`](docs/adr/). The domain vocabulary is in
+[`GLOSSARY.md`](GLOSSARY.md).
