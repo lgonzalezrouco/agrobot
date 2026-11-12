@@ -1,21 +1,31 @@
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from decimal import Decimal
 
 import pytest
 from fastapi import status
 from httpx import AsyncClient
-from sqlalchemy import delete
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from agrobot.api.app import create_app
 from agrobot.api.deps import get_session
 from agrobot.core.config import Settings
+from agrobot.fields import service as fields
+from agrobot.fields.models import Field
 from agrobot.locations import service as locations
 from agrobot.locations.models import Location
 from agrobot.users import service as users
 from agrobot.users.models import User
-from tests.conftest import API_KEY, api_client, register_field, register_user, wait_until_blocked
+from tests.conftest import (
+    API_KEY,
+    api_client,
+    create_field,
+    register_field,
+    register_user,
+    wait_until_blocked,
+)
 
 
 async def test_register_field_returns_field_with_its_location(client: AsyncClient) -> None:
@@ -276,3 +286,24 @@ async def test_register_field_for_a_user_deleted_concurrently_returns_404(
             await registerer.rollback()
             await deleter.execute(delete(User).where(User.id == user.id))
             await deleter.commit()
+
+
+async def test_concurrent_coordinate_updates_map_the_field_to_its_final_location(
+    committed_session_factory: async_sessionmaker[AsyncSession], engine: AsyncEngine
+) -> None:
+    field = await create_field(committed_session_factory, latitude=10, longitude=10)
+    async with committed_session_factory() as first:
+        locked = (
+            await first.scalars(select(Field).where(Field.id == field.id).with_for_update(of=Field))
+        ).one()
+        locked.longitude = 20
+        locked.location = await locations.get_or_create(first, 10, 20)
+        await first.flush()
+        async with committed_session_factory() as second:
+            racing = asyncio.create_task(fields.update(second, field.id, None, 20, None))
+            await wait_until_blocked(engine)
+            await first.commit()
+            updated = await racing
+
+    assert (updated.latitude, updated.longitude) == (20, 20)
+    assert (updated.location.latitude, updated.location.longitude) == (Decimal(20), Decimal(20))

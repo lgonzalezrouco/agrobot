@@ -11,6 +11,15 @@ async def get(session: AsyncSession, field_id: uuid.UUID) -> Field | None:
     return await session.get(Field, field_id)
 
 
+async def get_for_update(session: AsyncSession, field_id: uuid.UUID) -> Field | None:
+    return await session.scalar(
+        select(Field)
+        .where(Field.id == field_id)
+        .with_for_update(of=Field)
+        .execution_options(populate_existing=True)
+    )
+
+
 async def list_for_user(session: AsyncSession, user_id: uuid.UUID) -> Sequence[Field]:
     return (
         await session.scalars(select(Field).where(Field.user_id == user_id).order_by(Field.id))
