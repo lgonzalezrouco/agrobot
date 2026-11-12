@@ -10,6 +10,13 @@ def _drop_uvicorn_color_message(_: WrappedLogger, __: str, event_dict: EventDict
     return event_dict
 
 
+def _drop_query_string(record: logging.LogRecord) -> bool:
+    if isinstance(record.args, tuple) and len(record.args) == 5:
+        client, method, path, version, status = record.args
+        record.args = (client, method, str(path).split("?", 1)[0], version, status)
+    return True
+
+
 def configure_logging(level: str = "INFO", *, json: bool = False) -> None:
     shared_processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,
@@ -53,3 +60,4 @@ def configure_logging(level: str = "INFO", *, json: bool = False) -> None:
         uvicorn_logger = logging.getLogger(name)
         uvicorn_logger.handlers.clear()
         uvicorn_logger.propagate = True
+    logging.getLogger("uvicorn.access").addFilter(_drop_query_string)
