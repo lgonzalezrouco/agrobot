@@ -1,8 +1,11 @@
 import asyncio
+import os
+import signal
 
 import pytest
 
-from agrobot.worker.__main__ import parse_job
+from agrobot.core.config import Settings
+from agrobot.worker.__main__ import JOBS, main, parse_job
 from agrobot.worker.runner import PeriodicRunner
 
 
@@ -50,3 +53,21 @@ def test_unknown_or_missing_job_fails(argv: list[str]) -> None:
         parse_job(argv)
 
     assert exc_info.value.code == 2
+
+
+async def test_main_runs_the_job_named_on_the_command_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def stop_after_first_run() -> None:
+        nonlocal calls
+        calls += 1
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setitem(JOBS, "fake", (lambda *_: stop_after_first_run, lambda _: 3600))
+    settings = Settings(database_url="postgresql+asyncpg://unused/unused", log_level="WARNING")
+
+    await asyncio.wait_for(main(parse_job(["fake"]), settings), timeout=5)
+
+    assert calls == 1
