@@ -1,5 +1,6 @@
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -20,8 +21,9 @@ async def ingest(
     *,
     concurrency: int,
     timeout_seconds: float,
+    timezone: ZoneInfo,
 ) -> None:
-    today = datetime.now(UTC).date()
+    today = datetime.now(timezone).date()
     days = [today + timedelta(days=offset) for offset in range(HORIZON_DAYS)]
     async with session_factory() as session:
         targets = await locations.list_with_fields(session)

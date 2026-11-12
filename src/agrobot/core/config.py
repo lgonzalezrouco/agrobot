@@ -1,4 +1,5 @@
 from functools import lru_cache
+from zoneinfo import ZoneInfo
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,6 +12,8 @@ class Settings(BaseSettings):
     log_json: bool = False
 
     database_url: str
+
+    timezone: ZoneInfo = ZoneInfo("America/Argentina/Buenos_Aires")
 
     ingest_interval_seconds: float = Field(default=3600.0, gt=0)
     ingest_concurrency: int = Field(default=10, gt=0)

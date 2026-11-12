@@ -28,11 +28,14 @@ JOBS: Jobs = {
             FakeWeatherProvider(),
             concurrency=settings.ingest_concurrency,
             timeout_seconds=settings.provider_timeout_seconds,
+            timezone=settings.timezone,
         ),
         lambda settings: settings.ingest_interval_seconds,
     ),
     "evaluate": (
-        lambda _, session_factory: partial(evaluate, session_factory),
+        lambda settings, session_factory: partial(
+            evaluate, session_factory, timezone=settings.timezone
+        ),
         lambda settings: settings.evaluate_interval_seconds,
     ),
     "notify": (
@@ -43,6 +46,7 @@ JOBS: Jobs = {
             batch_size=settings.notify_batch_size,
             max_attempts=settings.notify_max_attempts,
             timeout_seconds=settings.send_timeout_seconds,
+            timezone=settings.timezone,
         ),
         lambda settings: settings.notify_interval_seconds,
     ),

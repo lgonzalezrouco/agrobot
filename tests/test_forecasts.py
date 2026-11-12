@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -18,7 +18,7 @@ from agrobot.forecasts.provider import FakeWeatherProvider, ProviderForecast
 from agrobot.locations import service as locations
 from agrobot.locations.models import Location
 from agrobot.weather import WeatherEventType
-from tests.conftest import create_field
+from tests.conftest import TIMEZONE, create_field, freeze_clock, next_22h_in_buenos_aires
 
 SessionFactory = async_sessionmaker[AsyncSession]
 FORECASTS_PER_RUN = len(WeatherEventType) * forecasts.HORIZON_DAYS
@@ -66,12 +66,16 @@ async def _ingest(
     timeout_seconds: float = 10,
 ) -> None:
     await forecasts.ingest(
-        session_factory, provider, concurrency=concurrency, timeout_seconds=timeout_seconds
+        session_factory,
+        provider,
+        concurrency=concurrency,
+        timeout_seconds=timeout_seconds,
+        timezone=TIMEZONE,
     )
 
 
 def _horizon() -> list[date]:
-    today = datetime.now(UTC).date()
+    today = datetime.now(TIMEZONE).date()
     return [today + timedelta(days=offset) for offset in range(forecasts.HORIZON_DAYS)]
 
 
@@ -99,6 +103,21 @@ async def test_ingest_stores_every_weather_event_type_for_the_7_day_horizon(
 
     assert await _stored(committed_session_factory, location_id) == {
         (weather_event_type, day): 42 for weather_event_type in WeatherEventType for day in horizon
+    }
+
+
+async def test_ingest_horizon_starts_at_the_local_today_after_utc_midnight(
+    committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    location_id = await _create_field(committed_session_factory)
+    instant = next_22h_in_buenos_aires()
+    freeze_clock(monkeypatch, forecasts, instant)
+
+    await _ingest(committed_session_factory, StubWeatherProvider())
+
+    local_today = instant.date() - timedelta(days=1)
+    assert {day for _, day in await _stored(committed_session_factory, location_id)} == {
+        local_today + timedelta(days=offset) for offset in range(7)
     }
 
 

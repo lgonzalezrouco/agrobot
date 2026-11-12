@@ -2,6 +2,7 @@ import asyncio
 import os
 import signal
 from functools import partial
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import ValidationError
@@ -90,7 +91,11 @@ def test_ingest_job_uses_the_ingest_settings() -> None:
     assert interval(settings) == 42
     assert isinstance(job, partial)
     assert job.func is ingest
-    assert job.keywords == {"concurrency": 3, "timeout_seconds": 10}
+    assert job.keywords == {
+        "concurrency": 3,
+        "timeout_seconds": 10,
+        "timezone": ZoneInfo("America/Argentina/Buenos_Aires"),
+    }
 
 
 def test_evaluate_job_uses_the_evaluate_interval() -> None:
@@ -104,6 +109,7 @@ def test_evaluate_job_uses_the_evaluate_interval() -> None:
     assert isinstance(job, partial)
     assert job.func is evaluate
     assert job.args == (session_factory,)
+    assert job.keywords == {"timezone": ZoneInfo("America/Argentina/Buenos_Aires")}
 
 
 @pytest.mark.parametrize("value", [0, -1])
@@ -130,7 +136,12 @@ def test_notify_job_uses_the_fake_sender_and_notify_settings() -> None:
     assert job.func is notify
     assert job.args[0] is session_factory
     assert isinstance(job.args[1], FakeNotificationSender)
-    assert job.keywords == {"batch_size": 4, "max_attempts": 3, "timeout_seconds": 10}
+    assert job.keywords == {
+        "batch_size": 4,
+        "max_attempts": 3,
+        "timeout_seconds": 10,
+        "timezone": ZoneInfo("America/Argentina/Buenos_Aires"),
+    }
 
 
 @pytest.mark.parametrize(
@@ -162,3 +173,14 @@ def test_timeouts_must_be_positive(setting: str, value: float) -> None:
 def test_timeouts_default_to_10_seconds() -> None:
     assert SETTINGS.provider_timeout_seconds == 10
     assert SETTINGS.send_timeout_seconds == 10
+
+
+def test_timezone_defaults_to_buenos_aires() -> None:
+    assert SETTINGS.timezone == ZoneInfo("America/Argentina/Buenos_Aires")
+
+
+def test_invalid_timezone_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="invalid timezone: Mars/Olympus_Mons"):
+        Settings.model_validate(
+            {"database_url": "postgresql+asyncpg://unused/unused", "timezone": "Mars/Olympus_Mons"}
+        )

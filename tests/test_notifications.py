@@ -20,14 +20,14 @@ from agrobot.notifications.models import Notification, NotificationStatus
 from agrobot.notifications.sender import FakeNotificationSender, NotificationContent
 from agrobot.users.models import User
 from agrobot.weather import WeatherEventType
-from tests.conftest import create_field
+from tests.conftest import TIMEZONE, create_field, freeze_clock, next_22h_in_buenos_aires
 
 SessionFactory = async_sessionmaker[AsyncSession]
 FROST = WeatherEventType.FROST
 
 
 def _day(offset: int) -> date:
-    return datetime.now(UTC).date() + timedelta(days=offset)
+    return datetime.now(TIMEZONE).date() + timedelta(days=offset)
 
 
 async def _create_alert(
@@ -77,6 +77,10 @@ async def _forecast(
         await session.commit()
 
 
+async def _evaluate(session_factory: SessionFactory) -> None:
+    await notifications.evaluate(session_factory, timezone=TIMEZONE)
+
+
 async def _notified(session_factory: SessionFactory, alert: Alert) -> dict[date, tuple[int, int]]:
     async with session_factory() as session:
         stored = await repository.list_for_alert(session, alert.id)
@@ -94,7 +98,7 @@ async def test_alert_fires_at_or_above_its_threshold_never_below(
     alert = await _create_alert(committed_session_factory, threshold=60)
     await _forecast(committed_session_factory, probability)
 
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
 
     assert set((await _notified(committed_session_factory, alert)).values()) == expected
 
@@ -106,7 +110,7 @@ async def test_each_day_at_or_above_threshold_gets_its_own_notification_from_tod
     for offset, probability in [(-1, 90), (0, 70), (1, 40), (2, 50), (6, 80)]:
         await _forecast(committed_session_factory, probability, day=_day(offset))
 
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
 
     assert await _notified(committed_session_factory, alert) == {
         _day(0): (70, 50),
@@ -115,13 +119,27 @@ async def test_each_day_at_or_above_threshold_gets_its_own_notification_from_tod
     }
 
 
+async def test_forecast_for_the_local_today_fires_after_utc_midnight(
+    committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instant = next_22h_in_buenos_aires()
+    local_today = instant.date() - timedelta(days=1)
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    await _forecast(committed_session_factory, 70, day=local_today)
+    freeze_clock(monkeypatch, notifications, instant)
+
+    await _evaluate(committed_session_factory)
+
+    assert await _notified(committed_session_factory, alert) == {local_today: (70, 50)}
+
+
 async def test_paused_alert_produces_no_notification(
     committed_session_factory: SessionFactory,
 ) -> None:
     alert = await _create_alert(committed_session_factory, threshold=10, active=False)
     await _forecast(committed_session_factory, 90)
 
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
 
     assert await _notified(committed_session_factory, alert) == {}
 
@@ -134,7 +152,7 @@ async def test_forecast_for_another_weather_event_type_or_location_produces_noth
     await _forecast(committed_session_factory, 90, weather_event_type=WeatherEventType.RAIN)
     await _forecast(committed_session_factory, 90, latitude=2, longitude=2)
 
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
 
     assert await _notified(committed_session_factory, alert) == {}
 
@@ -146,7 +164,7 @@ async def test_alerts_on_fields_sharing_a_location_each_get_notifications(
     second = await _create_alert(committed_session_factory, threshold=60, latitude=1.02)
     await _forecast(committed_session_factory, 70)
 
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
 
     assert await _notified(committed_session_factory, first) == {_day(1): (70, 40)}
     assert await _notified(committed_session_factory, second) == {_day(1): (70, 60)}
@@ -157,11 +175,11 @@ async def test_second_run_keeps_the_original_notification_after_changes(
 ) -> None:
     alert = await _create_alert(committed_session_factory, threshold=50)
     await _forecast(committed_session_factory, 60)
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
     await _forecast(committed_session_factory, 95)
     await _update_alert(committed_session_factory, alert, threshold=20)
 
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
 
     assert await _notified(committed_session_factory, alert) == {_day(1): (60, 50)}
 
@@ -172,10 +190,10 @@ async def test_lowering_threshold_fires_for_days_not_yet_notified(
     alert = await _create_alert(committed_session_factory, threshold=80)
     await _forecast(committed_session_factory, 90, day=_day(1))
     await _forecast(committed_session_factory, 60, day=_day(2))
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
     await _update_alert(committed_session_factory, alert, threshold=50)
 
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
 
     assert await _notified(committed_session_factory, alert) == {
         _day(1): (90, 80),
@@ -188,10 +206,10 @@ async def test_resumed_alert_fires_on_the_next_run(
 ) -> None:
     alert = await _create_alert(committed_session_factory, threshold=50, active=False)
     await _forecast(committed_session_factory, 60)
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
     await _update_alert(committed_session_factory, alert, active=True)
 
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
 
     assert await _notified(committed_session_factory, alert) == {_day(1): (60, 50)}
 
@@ -200,10 +218,10 @@ async def test_new_alert_fires_on_the_next_run_for_existing_forecasts(
     committed_session_factory: SessionFactory,
 ) -> None:
     await _forecast(committed_session_factory, 60)
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
     alert = await _create_alert(committed_session_factory, threshold=50)
 
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
 
     assert await _notified(committed_session_factory, alert) == {_day(1): (60, 50)}
 
@@ -218,7 +236,7 @@ async def test_concurrent_runs_create_each_notification_once(
         for offset in range(7):
             await _forecast(committed_session_factory, 50, day=_day(offset), latitude=n)
 
-    await asyncio.gather(*(notifications.evaluate(committed_session_factory) for _ in range(4)))
+    await asyncio.gather(*(_evaluate(committed_session_factory) for _ in range(4)))
 
     for alert in alerts:
         assert len(await _notified(committed_session_factory, alert)) == 7
@@ -230,7 +248,7 @@ async def test_deleting_alert_field_or_user_deletes_its_notifications(
 ) -> None:
     alert = await _create_alert(committed_session_factory, threshold=10)
     await _forecast(committed_session_factory, 50)
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
     async with committed_session_factory() as session:
         field = await session.get_one(Field, alert.field_id)
         target_id = {Alert: alert.id, Field: field.id, User: field.user_id}[deleted]
@@ -247,7 +265,7 @@ async def test_new_notification_is_pending_and_due_now(
     await _forecast(committed_session_factory, 60)
     before = datetime.now(UTC)
 
-    await notifications.evaluate(committed_session_factory)
+    await _evaluate(committed_session_factory)
 
     async with committed_session_factory() as session:
         [notification] = await repository.list_for_alert(session, alert.id)
@@ -343,6 +361,7 @@ async def _notify(
         batch_size=batch_size,
         max_attempts=max_attempts,
         timeout_seconds=timeout_seconds,
+        timezone=TIMEZONE,
     )
 
 
@@ -622,6 +641,21 @@ async def test_pending_notification_for_a_past_day_expires_instead_of_being_sent
     assert [content.day for _, content in sender.sent] == [_day(0)]
 
 
+async def test_notification_for_the_local_today_is_still_sent_after_utc_midnight(
+    committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instant = next_22h_in_buenos_aires()
+    local_today = instant.date() - timedelta(days=1)
+    alert = await _pending(committed_session_factory, day=local_today)
+    freeze_clock(monkeypatch, notifications, instant)
+    sender = StubNotificationSender()
+
+    await _notify(committed_session_factory, sender)
+
+    assert await _status(committed_session_factory, alert) == NotificationStatus.SENT
+    assert [content.day for _, content in sender.sent] == [local_today]
+
+
 @pytest.mark.parametrize("status", [NotificationStatus.SENT, NotificationStatus.FAILED])
 async def test_sent_or_failed_notification_for_a_past_day_is_never_expired(
     committed_session_factory: SessionFactory, status: NotificationStatus
@@ -682,7 +716,9 @@ async def test_notification_whose_day_ends_after_it_is_claimed_expires_instead_o
         for latitude in [1, 2]
     ]
     clock = [datetime.now(UTC)]
-    monkeypatch.setattr(notifications, "datetime", SimpleNamespace(now=lambda tz: clock[0]))
+    monkeypatch.setattr(
+        notifications, "datetime", SimpleNamespace(now=lambda tz: clock[0].astimezone(tz))
+    )
     claim_due = repository.claim_due
 
     async def claim_due_until_midnight(*args: Any) -> Any:

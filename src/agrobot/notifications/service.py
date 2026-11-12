@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -11,9 +12,11 @@ from agrobot.notifications.sender import NotificationContent, NotificationSender
 logger = structlog.get_logger(__name__)
 
 
-async def evaluate(session_factory: async_sessionmaker[AsyncSession]) -> None:
+async def evaluate(
+    session_factory: async_sessionmaker[AsyncSession], *, timezone: ZoneInfo
+) -> None:
     async with session_factory() as session:
-        created = await repository.create_due(session, datetime.now(UTC).date())
+        created = await repository.create_due(session, datetime.now(timezone).date())
         await session.commit()
     logger.info("notifications.evaluated", created=created)
 
@@ -25,14 +28,15 @@ async def notify(
     batch_size: int,
     max_attempts: int,
     timeout_seconds: float,
+    timezone: ZoneInfo,
 ) -> None:
     sent = retried = failed = 0
     now = datetime.now(UTC)
     async with session_factory() as session:
-        expired = await repository.expire_past(session, now.date())
+        expired = await repository.expire_past(session, now.astimezone(timezone).date())
         await session.commit()
         claimed = await repository.claim_due(session, now, batch_size)
-        today = datetime.now(UTC).date()
+        today = datetime.now(timezone).date()
         due = []
         for notification, phone_number, content in claimed:
             if notification.day < today:
