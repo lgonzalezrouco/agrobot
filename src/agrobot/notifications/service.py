@@ -24,8 +24,11 @@ async def notify(
     max_attempts: int,
 ) -> None:
     sent = failed = 0
+    now = datetime.now(UTC)
     async with session_factory() as session:
-        claimed = await repository.claim_due(session, datetime.now(UTC), batch_size)
+        expired = await repository.expire_past(session, now.date())
+        await session.commit()
+        claimed = await repository.claim_due(session, now, batch_size)
         for notification, phone_number, content in claimed:
             try:
                 await sender.send(phone_number, content)
@@ -38,5 +41,9 @@ async def notify(
             sent += 1
         await session.commit()
     logger.info(
-        "notifications.notified", sent=sent, retried=len(claimed) - sent - failed, failed=failed
+        "notifications.notified",
+        expired=expired,
+        sent=sent,
+        retried=len(claimed) - sent - failed,
+        failed=failed,
     )

@@ -524,6 +524,7 @@ async def test_run_logs_how_many_notifications_were_sent_retried_and_failed(
 
     assert {
         "event": "notifications.notified",
+        "expired": 0,
         "sent": 1,
         "retried": 2,
         "failed": 1,
@@ -568,3 +569,57 @@ async def test_run_skips_a_notification_locked_by_another_run_without_waiting(
         await asyncio.wait_for(_notify(committed_session_factory, sender), timeout=5)
 
     assert [content.day for _, content in sender.sent] == [_day(1)]
+
+
+async def _status(session_factory: SessionFactory, alert: Alert) -> NotificationStatus:
+    async with session_factory() as session:
+        [notification] = await repository.list_for_alert(session, alert.id)
+    return notification.status
+
+
+async def test_pending_notification_for_a_past_day_expires_instead_of_being_sent(
+    committed_session_factory: SessionFactory,
+) -> None:
+    past = await _pending(committed_session_factory, day=_day(-1), latitude=1)
+    today = await _pending(committed_session_factory, day=_day(0), latitude=2)
+    sender = StubNotificationSender()
+
+    await _notify(committed_session_factory, sender)
+
+    assert await _status(committed_session_factory, past) == NotificationStatus.EXPIRED
+    assert await _status(committed_session_factory, today) == NotificationStatus.SENT
+    assert [content.day for _, content in sender.sent] == [_day(0)]
+
+
+@pytest.mark.parametrize("status", [NotificationStatus.SENT, NotificationStatus.FAILED])
+async def test_sent_or_failed_notification_for_a_past_day_is_never_expired(
+    committed_session_factory: SessionFactory, status: NotificationStatus
+) -> None:
+    alert = await _pending(committed_session_factory, day=_day(-1))
+    await _update_notification(committed_session_factory, alert, status=status)
+
+    await _notify(committed_session_factory, StubNotificationSender())
+
+    assert await _status(committed_session_factory, alert) == status
+
+
+async def test_past_day_notifications_do_not_take_batch_slots(
+    committed_session_factory: SessionFactory,
+) -> None:
+    for latitude in range(3):
+        await _pending(committed_session_factory, day=_day(-1), latitude=latitude)
+    await _pending(committed_session_factory, day=_day(1), latitude=10)
+    sender = StubNotificationSender()
+
+    with structlog.testing.capture_logs() as logs:
+        await _notify(committed_session_factory, sender, batch_size=2)
+
+    assert [content.day for _, content in sender.sent] == [_day(1)]
+    assert {
+        "event": "notifications.notified",
+        "expired": 3,
+        "sent": 1,
+        "retried": 0,
+        "failed": 0,
+        "log_level": "info",
+    } in logs

@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from typing import NamedTuple
 
-from sqlalchemy import CursorResult, select
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +38,15 @@ async def create_due(session: AsyncSession, today: date) -> int:
         insert(Notification)
         .from_select(["alert_id", "day", "probability", "threshold"], due)
         .on_conflict_do_nothing(index_elements=[Notification.alert_id, Notification.day])
+    )
+    return result.rowcount
+
+
+async def expire_past(session: AsyncSession, today: date) -> int:
+    result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
+        update(Notification)
+        .where(Notification.status == NotificationStatus.PENDING, Notification.day < today)
+        .values(status=NotificationStatus.EXPIRED)
     )
     return result.rowcount
 
