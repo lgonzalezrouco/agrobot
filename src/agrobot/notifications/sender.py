@@ -8,7 +8,7 @@ from agrobot.weather import WeatherEventType
 logger = structlog.get_logger(__name__)
 
 
-class NotificationMessage(NamedTuple):
+class NotificationContent(NamedTuple):
     field_name: str
     weather_event_type: WeatherEventType
     day: date
@@ -17,9 +17,9 @@ class NotificationMessage(NamedTuple):
 
 
 class NotificationSender(Protocol):
-    async def send(self, phone_number: str, message: NotificationMessage) -> None: ...
+    async def send(self, phone_number: str, content: NotificationContent) -> None: ...
 
 
 class FakeNotificationSender:
-    async def send(self, phone_number: str, message: NotificationMessage) -> None:
-        logger.info("notifications.fake_sent", **message._asdict())
+    async def send(self, phone_number: str, content: NotificationContent) -> None:
+        logger.info("notifications.fake_sent", **content._asdict())

@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -44,3 +44,7 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     attempts: Mapped[int] = mapped_column(server_default="0")
     next_attempt_at: Mapped[datetime] = mapped_column(server_default=func.now())
     sent_at: Mapped[datetime | None]
+
+    def mark_sent(self) -> None:
+        self.status = NotificationStatus.SENT
+        self.sent_at = datetime.now(UTC)
