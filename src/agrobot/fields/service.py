@@ -5,7 +5,8 @@ import structlog
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agrobot.core.errors import FOREIGN_KEY_VIOLATION, NotFoundError
+from agrobot.core.db import is_foreign_key_violation
+from agrobot.core.errors import NotFoundError
 from agrobot.fields import repository
 from agrobot.fields.models import Field
 from agrobot.locations import service as locations
@@ -27,7 +28,7 @@ async def register(
         await repository.save(session, field)
     except IntegrityError as exc:
         await session.rollback()
-        if getattr(exc.orig, "sqlstate", None) == FOREIGN_KEY_VIOLATION:
+        if is_foreign_key_violation(exc):
             raise NotFoundError("user not found") from exc
         raise
     await session.commit()

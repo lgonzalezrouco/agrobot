@@ -18,7 +18,7 @@ from agrobot.locations.models import Location
 from agrobot.users import service as users
 from agrobot.users.models import User
 from agrobot.weather import WeatherEventType
-from tests.conftest import register_field, register_user
+from tests.conftest import register_field, register_user, wait_until_blocked
 
 
 async def _configure_alert(
@@ -291,7 +291,7 @@ async def test_configure_alert_on_a_field_deleted_concurrently_raises_not_found(
             racing = asyncio.create_task(
                 alerts.configure(configurer, field.id, WeatherEventType.FROST, 50, True)
             )
-            await asyncio.sleep(0.2)
+            await wait_until_blocked(engine)
             await deleter.commit()
 
             with pytest.raises(NotFoundError):

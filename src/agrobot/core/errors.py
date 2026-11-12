@@ -1,6 +1,3 @@
-FOREIGN_KEY_VIOLATION = "23503"
-
-
 class NotFoundError(Exception):
     """A requested entity does not exist."""
 
