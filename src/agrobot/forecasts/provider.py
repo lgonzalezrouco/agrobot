@@ -37,5 +37,5 @@ class FakeWeatherProvider:
 
 
 def _probability(location: Location, day: date, weather_event_type: WeatherEventType) -> int:
-    seed = f"{location.latitude}|{location.longitude}|{day}|{weather_event_type}"
+    seed = f"{location.latitude:.1f}|{location.longitude:.1f}|{day}|{weather_event_type}"
     return int.from_bytes(hashlib.sha256(seed.encode()).digest()[:4]) % 101

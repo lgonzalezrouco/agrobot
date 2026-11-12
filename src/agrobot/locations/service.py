@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,3 +18,7 @@ async def get_or_create(session: AsyncSession, latitude: float, longitude: float
     if snapped_longitude == 180:
         snapped_longitude = Decimal("-180.0")
     return await repository.get_or_create(session, _snap_to_grid(latitude), snapped_longitude)
+
+
+async def list_with_fields(session: AsyncSession) -> Sequence[Location]:
+    return await repository.list_with_fields(session)

@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agrobot.forecasts import repository
 from agrobot.forecasts.provider import WeatherProvider
-from agrobot.locations import repository as locations
+from agrobot.locations import service as locations
 
 HORIZON_DAYS = 7
 

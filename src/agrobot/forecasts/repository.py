@@ -22,10 +22,19 @@ async def list_for_location(session: AsyncSession, location_id: uuid.UUID) -> Se
 async def upsert(
     session: AsyncSession, location_id: uuid.UUID, forecasts: Sequence[ProviderForecast]
 ) -> None:
-    if not forecasts:
+    latest = {(f.weather_event_type, f.day): f.probability for f in forecasts}
+    if not latest:
         return
     statement = insert(Forecast).values(
-        [{"location_id": location_id, **forecast._asdict()} for forecast in forecasts]
+        [
+            {
+                "location_id": location_id,
+                "weather_event_type": weather_event_type,
+                "day": day,
+                "probability": probability,
+            }
+            for (weather_event_type, day), probability in latest.items()
+        ]
     )
     await session.execute(
         statement.on_conflict_do_update(

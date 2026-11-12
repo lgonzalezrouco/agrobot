@@ -4,12 +4,14 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from agrobot.alerts.models import Alert
 from agrobot.fields.models import Field
 from agrobot.forecasts import repository
-from agrobot.forecasts import service as ingestion
+from agrobot.forecasts import service as forecasts
 from agrobot.forecasts.models import Forecast
 from agrobot.forecasts.provider import FakeWeatherProvider, ProviderForecast
 from agrobot.locations import service as locations
@@ -18,6 +20,7 @@ from agrobot.users.models import User
 from agrobot.weather import WeatherEventType
 
 SessionFactory = async_sessionmaker[AsyncSession]
+FORECASTS_PER_RUN = len(WeatherEventType) * forecasts.HORIZON_DAYS
 
 
 class StubWeatherProvider:
@@ -40,7 +43,7 @@ class StubWeatherProvider:
 
 def _horizon() -> list[date]:
     today = datetime.now(UTC).date()
-    return [today + timedelta(days=offset) for offset in range(ingestion.HORIZON_DAYS)]
+    return [today + timedelta(days=offset) for offset in range(forecasts.HORIZON_DAYS)]
 
 
 async def _create_field(
@@ -76,14 +79,25 @@ async def test_ingest_stores_every_weather_event_type_for_the_7_day_horizon(
     committed_session_factory: SessionFactory,
 ) -> None:
     location_id = await _create_field(committed_session_factory)
+    horizon = _horizon()
 
-    await ingestion.ingest(committed_session_factory, StubWeatherProvider(probability=42))
+    await forecasts.ingest(committed_session_factory, StubWeatherProvider(probability=42))
 
     assert await _stored(committed_session_factory, location_id) == {
-        (weather_event_type, day): 42
-        for weather_event_type in WeatherEventType
-        for day in _horizon()
+        (weather_event_type, day): 42 for weather_event_type in WeatherEventType for day in horizon
     }
+
+
+async def test_field_without_alerts_gets_forecasts(
+    committed_session_factory: SessionFactory,
+) -> None:
+    location_id = await _create_field(committed_session_factory)
+    async with committed_session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(Alert)) == 0
+
+    await forecasts.ingest(committed_session_factory, StubWeatherProvider())
+
+    assert len(await _stored(committed_session_factory, location_id)) == FORECASTS_PER_RUN
 
 
 async def test_location_without_fields_gets_no_forecasts(
@@ -94,7 +108,7 @@ async def test_location_without_fields_gets_no_forecasts(
         await session.commit()
     provider = StubWeatherProvider()
 
-    await ingestion.ingest(committed_session_factory, provider)
+    await forecasts.ingest(committed_session_factory, provider)
 
     assert await _stored(committed_session_factory, empty.id) == {}
     assert provider.calls == []
@@ -107,19 +121,19 @@ async def test_fields_sharing_a_location_get_one_provider_call(
     assert await _create_field(committed_session_factory, 1.02, 1.02) == location_id
     provider = StubWeatherProvider()
 
-    await ingestion.ingest(committed_session_factory, provider)
+    await forecasts.ingest(committed_session_factory, provider)
 
     assert provider.calls == [location_id]
-    assert len(await _stored(committed_session_factory, location_id)) == 35
+    assert len(await _stored(committed_session_factory, location_id)) == FORECASTS_PER_RUN
 
 
 async def test_second_run_overwrites_probabilities(
     committed_session_factory: SessionFactory,
 ) -> None:
     location_id = await _create_field(committed_session_factory)
-    await ingestion.ingest(committed_session_factory, StubWeatherProvider(probability=10))
+    await forecasts.ingest(committed_session_factory, StubWeatherProvider(probability=10))
 
-    await ingestion.ingest(committed_session_factory, StubWeatherProvider(probability=90))
+    await forecasts.ingest(committed_session_factory, StubWeatherProvider(probability=90))
 
     assert set((await _stored(committed_session_factory, location_id)).values()) == {90}
 
@@ -128,12 +142,12 @@ async def test_forecast_omitted_by_the_provider_keeps_its_previous_value(
     committed_session_factory: SessionFactory,
 ) -> None:
     location_id = await _create_field(committed_session_factory)
-    await ingestion.ingest(committed_session_factory, StubWeatherProvider(probability=10))
-    revised = StubWeatherProvider(probability=90)
     omitted = (WeatherEventType.HAIL, _horizon()[3])
+    await forecasts.ingest(committed_session_factory, StubWeatherProvider(probability=10))
+    revised = StubWeatherProvider(probability=90)
     revised.omit.add(omitted)
 
-    await ingestion.ingest(committed_session_factory, revised)
+    await forecasts.ingest(committed_session_factory, revised)
 
     stored = await _stored(committed_session_factory, location_id)
     assert stored.pop(omitted) == 10
@@ -171,3 +185,39 @@ async def test_fake_provider_is_deterministic_complete_and_in_range() -> None:
         (weather_event_type, day) for weather_event_type in WeatherEventType for day in days
     }
     assert all(0 <= f.probability <= 100 for f in first)
+
+
+async def test_duplicate_provider_forecasts_keep_the_last_value(
+    committed_session_factory: SessionFactory,
+) -> None:
+    location_id = await _create_field(committed_session_factory)
+    day = _horizon()[0]
+
+    async with committed_session_factory() as session:
+        await repository.upsert(
+            session,
+            location_id,
+            [
+                ProviderForecast(WeatherEventType.RAIN, day, 30),
+                ProviderForecast(WeatherEventType.RAIN, day, 60),
+            ],
+        )
+        await session.commit()
+
+    assert await _stored(committed_session_factory, location_id) == {
+        (WeatherEventType.RAIN, day): 60
+    }
+
+
+async def test_fake_provider_depends_on_coordinate_values_not_their_spelling() -> None:
+    day = _horizon()[0]
+    provider = FakeWeatherProvider()
+
+    short = await provider.get_forecasts(
+        Location(latitude=Decimal("-34.6"), longitude=Decimal("-58.4")), [day]
+    )
+    padded = await provider.get_forecasts(
+        Location(latitude=Decimal("-34.60"), longitude=Decimal("-58.40")), [day]
+    )
+
+    assert short == padded
