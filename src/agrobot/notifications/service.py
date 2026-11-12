@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 
 import structlog
@@ -22,6 +23,7 @@ async def notify(
     *,
     batch_size: int,
     max_attempts: int,
+    timeout_seconds: float,
 ) -> None:
     sent = retried = failed = 0
     now = datetime.now(UTC)
@@ -35,7 +37,8 @@ async def notify(
                 expired += 1
                 continue
             try:
-                await sender.send(phone_number, content)
+                async with asyncio.timeout(timeout_seconds):
+                    await sender.send(phone_number, content)
             except Exception:
                 logger.exception("notifications.send_failed", notification_id=notification.id)
                 if notification.mark_send_failed(max_attempts):

@@ -20,6 +20,7 @@ async def ingest(
     provider: WeatherProvider,
     *,
     concurrency: int,
+    timeout_seconds: float,
 ) -> None:
     today = datetime.now(UTC).date()
     days = [today + timedelta(days=offset) for offset in range(HORIZON_DAYS)]
@@ -28,7 +29,7 @@ async def ingest(
     semaphore = asyncio.Semaphore(concurrency)
     results = await asyncio.gather(
         *(
-            _ingest_location(session_factory, provider, semaphore, location, days)
+            _ingest_location(session_factory, provider, semaphore, location, days, timeout_seconds)
             for location in targets
         )
     )
@@ -42,10 +43,12 @@ async def _ingest_location(
     semaphore: asyncio.Semaphore,
     location: Location,
     days: Sequence[date],
+    timeout_seconds: float,
 ) -> bool:
     try:
         async with semaphore:
-            forecasts = await provider.get_forecasts(location, days)
+            async with asyncio.timeout(timeout_seconds):
+                forecasts = await provider.get_forecasts(location, days)
             async with session_factory() as session:
                 await repository.upsert(session, location.id, forecasts)
                 await session.commit()

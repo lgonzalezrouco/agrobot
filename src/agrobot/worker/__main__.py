@@ -23,7 +23,11 @@ Jobs = Mapping[str, tuple[JobFactory, Interval]]
 JOBS: Jobs = {
     "ingest": (
         lambda settings, session_factory: partial(
-            ingest, session_factory, FakeWeatherProvider(), concurrency=settings.ingest_concurrency
+            ingest,
+            session_factory,
+            FakeWeatherProvider(),
+            concurrency=settings.ingest_concurrency,
+            timeout_seconds=settings.provider_timeout_seconds,
         ),
         lambda settings: settings.ingest_interval_seconds,
     ),
@@ -38,6 +42,7 @@ JOBS: Jobs = {
             FakeNotificationSender(),
             batch_size=settings.notify_batch_size,
             max_attempts=settings.notify_max_attempts,
+            timeout_seconds=settings.send_timeout_seconds,
         ),
         lambda settings: settings.notify_interval_seconds,
     ),

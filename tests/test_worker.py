@@ -90,7 +90,7 @@ def test_ingest_job_uses_the_ingest_settings() -> None:
     assert interval(settings) == 42
     assert isinstance(job, partial)
     assert job.func is ingest
-    assert job.keywords == {"concurrency": 3}
+    assert job.keywords == {"concurrency": 3, "timeout_seconds": 10}
 
 
 def test_evaluate_job_uses_the_evaluate_interval() -> None:
@@ -130,7 +130,7 @@ def test_notify_job_uses_the_fake_sender_and_notify_settings() -> None:
     assert job.func is notify
     assert job.args[0] is session_factory
     assert isinstance(job.args[1], FakeNotificationSender)
-    assert job.keywords == {"batch_size": 4, "max_attempts": 3}
+    assert job.keywords == {"batch_size": 4, "max_attempts": 3, "timeout_seconds": 10}
 
 
 @pytest.mark.parametrize(
@@ -148,3 +148,17 @@ def test_notify_settings_default_to_30_seconds_100_per_batch_and_5_attempts() ->
     assert SETTINGS.notify_interval_seconds == 30
     assert SETTINGS.notify_batch_size == 100
     assert SETTINGS.notify_max_attempts == 5
+
+
+@pytest.mark.parametrize("setting", ["provider_timeout_seconds", "send_timeout_seconds"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_timeouts_must_be_positive(setting: str, value: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate(
+            {"database_url": "postgresql+asyncpg://unused/unused", setting: value}
+        )
+
+
+def test_timeouts_default_to_10_seconds() -> None:
+    assert SETTINGS.provider_timeout_seconds == 10
+    assert SETTINGS.send_timeout_seconds == 10

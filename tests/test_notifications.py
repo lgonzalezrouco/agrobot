@@ -289,9 +289,12 @@ class StubNotificationSender:
     def __init__(self) -> None:
         self.sent: list[tuple[str, NotificationContent]] = []
         self.failing: set[str] = set()
+        self.hanging: set[str] = set()
 
     async def send(self, phone_number: str, content: NotificationContent) -> None:
         await asyncio.sleep(0)
+        if content.field_name in self.hanging:
+            await asyncio.Event().wait()
         if content.field_name in self.failing:
             raise RuntimeError("sender unavailable")
         self.sent.append((phone_number, content))
@@ -331,9 +334,14 @@ async def _notify(
     sender: StubNotificationSender,
     batch_size: int = 100,
     max_attempts: int = 5,
+    timeout_seconds: float = 10,
 ) -> None:
     await notifications.notify(
-        session_factory, sender, batch_size=batch_size, max_attempts=max_attempts
+        session_factory,
+        sender,
+        batch_size=batch_size,
+        max_attempts=max_attempts,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -437,6 +445,29 @@ async def test_failed_send_is_retried_later_without_stopping_the_batch(
     assert failed.next_attempt_at > before + timedelta(seconds=10)
     assert sent.status == NotificationStatus.SENT
     assert [content.field_name for _, content in sender.sent] == ["Lote"]
+
+
+async def test_send_that_never_answers_is_retried_later_without_stopping_the_batch(
+    committed_session_factory: SessionFactory,
+) -> None:
+    hanging = await _pending(committed_session_factory, day=_day(0), latitude=1)
+    delivered = await _pending(committed_session_factory, day=_day(1), latitude=2)
+    await _make_sends_fail(committed_session_factory, hanging)
+    sender = StubNotificationSender()
+    sender.hanging.add("Broken")
+    before = datetime.now(UTC)
+
+    await asyncio.wait_for(
+        _notify(committed_session_factory, sender, timeout_seconds=0.05), timeout=5
+    )
+
+    async with committed_session_factory() as session:
+        [retried] = await repository.list_for_alert(session, hanging.id)
+        [sent] = await repository.list_for_alert(session, delivered.id)
+    assert retried.status == NotificationStatus.PENDING
+    assert retried.attempts == 1
+    assert retried.next_attempt_at > before + timedelta(seconds=10)
+    assert sent.status == NotificationStatus.SENT
 
 
 async def test_retry_delay_doubles_per_attempt_up_to_one_hour(
