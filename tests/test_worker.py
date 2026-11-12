@@ -125,9 +125,7 @@ def test_evaluate_interval_defaults_to_5_minutes() -> None:
 
 def test_notify_job_uses_the_fake_sender_and_notify_settings() -> None:
     build_job, interval = JOBS["notify"]
-    settings = SETTINGS.model_copy(
-        update={"notify_interval_seconds": 9, "notify_batch_size": 4, "notify_max_attempts": 3}
-    )
+    settings = SETTINGS.model_copy(update={"notify_interval_seconds": 9, "notify_batch_size": 4})
     session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker()
 
     job = build_job(settings, session_factory)
@@ -139,15 +137,12 @@ def test_notify_job_uses_the_fake_sender_and_notify_settings() -> None:
     assert isinstance(job.args[1], FakeNotificationSender)
     assert job.keywords == {
         "batch_size": 4,
-        "max_attempts": 3,
         "timeout_seconds": 10,
         "timezone": TIMEZONE,
     }
 
 
-@pytest.mark.parametrize(
-    "setting", ["notify_interval_seconds", "notify_batch_size", "notify_max_attempts"]
-)
+@pytest.mark.parametrize("setting", ["notify_interval_seconds", "notify_batch_size"])
 @pytest.mark.parametrize("value", [0, -1])
 def test_notify_settings_must_be_positive(setting: str, value: int) -> None:
     with pytest.raises(ValidationError):
@@ -156,10 +151,9 @@ def test_notify_settings_must_be_positive(setting: str, value: int) -> None:
         )
 
 
-def test_notify_settings_default_to_30_seconds_100_per_batch_and_5_attempts() -> None:
+def test_notify_settings_default_to_30_seconds_and_100_per_batch() -> None:
     assert SETTINGS.notify_interval_seconds == 30
     assert SETTINGS.notify_batch_size == 100
-    assert SETTINGS.notify_max_attempts == 5
 
 
 @pytest.mark.parametrize("setting", ["provider_timeout_seconds", "send_timeout_seconds"])

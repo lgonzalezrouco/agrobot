@@ -56,11 +56,7 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     def mark_expired(self) -> None:
         self.status = NotificationStatus.EXPIRED
 
-    def mark_send_failed(self, max_attempts: int) -> bool:
+    def mark_send_failed(self) -> None:
         self.attempts += 1
-        if self.attempts >= max_attempts:
-            self.status = NotificationStatus.FAILED
-            return True
         delay = min(RETRY_BASE_DELAY_SECONDS * 2 ** (self.attempts - 1), RETRY_MAX_DELAY_SECONDS)
         self.next_attempt_at = datetime.now(UTC) + timedelta(seconds=delay)
-        return False

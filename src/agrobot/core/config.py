@@ -23,7 +23,6 @@ class Settings(BaseSettings):
 
     notify_interval_seconds: float = Field(default=30.0, gt=0)
     notify_batch_size: int = Field(default=100, gt=0)
-    notify_max_attempts: int = Field(default=5, gt=0)
     send_timeout_seconds: float = Field(default=10.0, gt=0)
 
 

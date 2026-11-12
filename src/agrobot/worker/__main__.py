@@ -44,7 +44,6 @@ JOBS: Jobs = {
             session_factory,
             FakeNotificationSender(),
             batch_size=settings.notify_batch_size,
-            max_attempts=settings.notify_max_attempts,
             timeout_seconds=settings.send_timeout_seconds,
             timezone=settings.timezone,
         ),

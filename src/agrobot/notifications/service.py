@@ -26,11 +26,10 @@ async def notify(
     sender: NotificationSender,
     *,
     batch_size: int,
-    max_attempts: int,
     timeout_seconds: float,
     timezone: ZoneInfo,
 ) -> None:
-    sent = retried = failed = 0
+    sent = retried = 0
     now = datetime.now(UTC)
     async with session_factory() as session:
         expired = await repository.expire_past(session, datetime.now(timezone).date())
@@ -61,9 +60,8 @@ async def notify(
             if delivered:
                 notification.mark_sent()
                 sent += 1
-            elif notification.mark_send_failed(max_attempts):
-                failed += 1
             else:
+                notification.mark_send_failed()
                 retried += 1
         await session.commit()
     logger.info(
@@ -71,5 +69,4 @@ async def notify(
         expired=expired,
         sent=sent,
         retried=retried,
-        failed=failed,
     )
