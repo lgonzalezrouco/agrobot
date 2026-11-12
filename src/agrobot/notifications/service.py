@@ -27,6 +27,13 @@ async def evaluate(
     logger.info("notifications.evaluated", created=created)
 
 
+_MARKS = {
+    "expired": Notification.mark_expired,
+    "sent": Notification.mark_sent,
+    "retried": Notification.mark_send_failed,
+}
+
+
 async def notify(
     session_factory: async_sessionmaker[AsyncSession],
     sender: NotificationSender,
@@ -35,58 +42,46 @@ async def notify(
     timeout_seconds: float,
     timezone: ZoneInfo,
 ) -> None:
-    async with session_factory() as session:
-        expired = await repository.expire_past(session, datetime.now(timezone).date())
-        await session.commit()
-    outcomes: Counter[NotificationStatus] = Counter()
+    started_at = datetime.now(UTC)
     lease = timedelta(seconds=batch_size * timeout_seconds)
+    outcomes: Counter[str] = Counter()
+    async with session_factory() as session:
+        outcomes["expired"] = await repository.expire_past(session, datetime.now(timezone).date())
+        await session.commit()
+
+    async def deliver(claim: repository.ClaimedNotification, today: date) -> str:
+        outcome = "expired"
+        if claim.notification.day >= today:
+            try:
+                async with asyncio.timeout(timeout_seconds):
+                    await sender.send(claim.phone_number, claim.content)
+                outcome = "sent"
+            except Exception:
+                logger.exception("notifications.send_failed", notification_id=claim.notification.id)
+                outcome = "retried"
+        async with session_factory() as session:
+            notification = await session.get(
+                Notification, claim.notification.id, with_for_update=True
+            )
+            if notification is not None and notification.status == NotificationStatus.PENDING:
+                _MARKS[outcome](notification)
+                await session.commit()
+        return outcome
+
     while True:
         async with session_factory() as session:
-            claimed = await repository.claim_due(session, datetime.now(UTC), batch_size, lease)
+            claimed = await repository.claim_due(session, started_at, batch_size)
+            leased_until = datetime.now(UTC) + lease
+            for claim in claimed:
+                claim.notification.lease_until(leased_until)
             await session.commit()
         today = datetime.now(timezone).date()
-        outcomes.update(
-            await asyncio.gather(
-                *(
-                    _deliver(session_factory, sender, claim, today, timeout_seconds)
-                    for claim in claimed
-                )
-            )
-        )
+        outcomes.update(await asyncio.gather(*(deliver(claim, today) for claim in claimed)))
         if len(claimed) < batch_size:
             break
     logger.info(
         "notifications.notified",
-        expired=expired + outcomes[NotificationStatus.EXPIRED],
-        sent=outcomes[NotificationStatus.SENT],
-        retried=outcomes[NotificationStatus.PENDING],
+        expired=outcomes["expired"],
+        sent=outcomes["sent"],
+        retried=outcomes["retried"],
     )
-
-
-async def _deliver(
-    session_factory: async_sessionmaker[AsyncSession],
-    sender: NotificationSender,
-    claim: repository.ClaimedNotification,
-    today: date,
-    timeout_seconds: float,
-) -> NotificationStatus:
-    outcome = NotificationStatus.EXPIRED
-    if claim.notification.day >= today:
-        try:
-            async with asyncio.timeout(timeout_seconds):
-                await sender.send(claim.phone_number, claim.content)
-            outcome = NotificationStatus.SENT
-        except Exception:
-            logger.exception("notifications.send_failed", notification_id=claim.notification.id)
-            outcome = NotificationStatus.PENDING
-    async with session_factory() as session:
-        notification = await session.get(Notification, claim.notification.id, with_for_update=True)
-        if notification is not None and notification.status == NotificationStatus.PENDING:
-            if outcome == NotificationStatus.SENT:
-                notification.mark_sent()
-            elif outcome == NotificationStatus.PENDING:
-                notification.mark_send_failed()
-            else:
-                notification.mark_expired()
-            await session.commit()
-    return outcome

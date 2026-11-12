@@ -1,6 +1,6 @@
 import uuid
 from collections.abc import Sequence
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import NamedTuple
 
 from sqlalchemy import CursorResult, delete, select, update
@@ -75,7 +75,7 @@ class ClaimedNotification(NamedTuple):
 
 
 async def claim_due(
-    session: AsyncSession, now: datetime, limit: int, lease: timedelta
+    session: AsyncSession, due_by: datetime, limit: int
 ) -> list[ClaimedNotification]:
     rows = await session.execute(
         select(Notification, User.phone_number, Field.name, Alert.weather_event_type)
@@ -84,13 +84,13 @@ async def claim_due(
         .join(User, User.id == Field.user_id)
         .where(
             Notification.status == NotificationStatus.PENDING,
-            Notification.next_attempt_at <= now,
+            Notification.next_attempt_at <= due_by,
         )
         .order_by(Notification.day, Notification.next_attempt_at)
         .limit(limit)
         .with_for_update(of=Notification, skip_locked=True)
     )
-    claimed = [
+    return [
         ClaimedNotification(
             notification,
             phone_number,
@@ -104,6 +104,3 @@ async def claim_due(
         )
         for notification, phone_number, field_name, weather_event_type in rows.tuples()
     ]
-    for claim in claimed:
-        claim.notification.next_attempt_at = now + lease
-    return claimed
