@@ -58,7 +58,7 @@ def upgrade() -> None:
         sa.CheckConstraint("threshold BETWEEN 0 AND 100", name="threshold_range"),
     )
     op.create_index(
-        op.f("ix_notifications_day"),
+        None,
         "notifications",
         ["day", "next_attempt_at"],
         postgresql_where=sa.text("status = 'pending'"),
@@ -66,6 +66,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_notifications_day"), table_name="notifications")
     op.drop_table("notifications")
     sa.Enum(name="notification_status").drop(op.get_bind())
