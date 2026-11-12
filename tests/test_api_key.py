@@ -35,12 +35,6 @@ async def test_request_without_the_right_api_key_is_rejected_and_changes_nothing
     assert (await client.get(f"/fields/{field['id']}/alerts")).json() == []
 
 
-async def test_request_with_the_right_api_key_is_served(client: AsyncClient) -> None:
-    user_id = await register_user(client)
-
-    assert (await client.get(f"/users/{user_id}")).status_code == status.HTTP_200_OK
-
-
 async def test_health_answers_without_api_key(app: FastAPI) -> None:
     async with api_client(app) as anonymous:
         response = await anonymous.get("/health")

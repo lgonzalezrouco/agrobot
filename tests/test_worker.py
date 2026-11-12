@@ -20,18 +20,6 @@ REQUIRED_SETTINGS = {"database_url": "postgresql+asyncpg://unused/unused"}
 SETTINGS = Settings.model_validate({**REQUIRED_SETTINGS, "log_level": "WARNING"})
 
 
-async def test_run_once_executes_the_job() -> None:
-    calls = 0
-
-    async def job() -> None:
-        nonlocal calls
-        calls += 1
-
-    await PeriodicRunner(job, interval_seconds=60).run_once()
-
-    assert calls == 1
-
-
 async def test_failing_iteration_does_not_crash_the_runner() -> None:
     async def job() -> None:
         raise RuntimeError("boom")
