@@ -8,7 +8,7 @@ everything through `uv run`.
 ```bash
 uv run pytest                    # needs Docker running; starts its own Postgres
 uv run uvicorn --factory agrobot.api.app:create_app --reload
-uv run python -m agrobot.worker
+uv run python -m agrobot.worker ingest     # or evaluate, notify
 ```
 
 ## Before writing code
