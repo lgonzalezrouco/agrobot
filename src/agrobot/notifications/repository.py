@@ -15,6 +15,10 @@ from agrobot.notifications.sender import NotificationContent
 from agrobot.users.models import User
 
 
+async def alert_exists(session: AsyncSession, alert_id: uuid.UUID) -> bool:
+    return await session.get(Alert, alert_id) is not None
+
+
 async def list_for_alert(session: AsyncSession, alert_id: uuid.UUID) -> Sequence[Notification]:
     return (
         await session.scalars(
