@@ -49,12 +49,15 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     sent_at: Mapped[datetime | None]
 
     def mark_sent(self) -> None:
+        self.attempts += 1
         self.status = NotificationStatus.SENT
         self.sent_at = datetime.now(UTC)
 
-    def mark_send_failed(self, max_attempts: int) -> None:
+    def mark_send_failed(self, max_attempts: int) -> bool:
+        self.attempts += 1
         if self.attempts >= max_attempts:
             self.status = NotificationStatus.FAILED
-            return
+            return True
         delay = min(RETRY_BASE_DELAY_SECONDS * 2 ** (self.attempts - 1), RETRY_MAX_DELAY_SECONDS)
         self.next_attempt_at = datetime.now(UTC) + timedelta(seconds=delay)
+        return False
