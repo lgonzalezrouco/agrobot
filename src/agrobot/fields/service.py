@@ -55,7 +55,9 @@ async def update(
     latitude: float | None,
     longitude: float | None,
 ) -> Field:
-    field = await get(session, field_id)
+    field = await repository.get_for_update(session, field_id)
+    if field is None:
+        raise NotFoundError("field not found")
     dropped = 0
     if name is not None:
         field.name = name
