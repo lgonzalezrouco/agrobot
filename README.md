@@ -12,7 +12,9 @@ cp .env.example .env
 docker compose up -d --wait db
 uv run alembic upgrade head
 uv run uvicorn --factory agrobot.api.app:create_app    # API en http://localhost:8000/docs
-uv run python -m agrobot.worker ingest                 # worker de ingesta, en otra terminal
+uv run python -m agrobot.worker ingest                 # cada worker en su propia terminal
+uv run python -m agrobot.worker evaluate
+uv run python -m agrobot.worker notify
 ```
 
 Todos los endpoints salvo `/health` piden el header `X-API-Key` con el valor de `API_KEY` de `.env`.
