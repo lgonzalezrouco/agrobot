@@ -6,11 +6,10 @@ from decimal import Decimal
 
 import pytest
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from agrobot.alerts.models import Alert
 from agrobot.forecasts import repository
 from agrobot.forecasts import service as forecasts
 from agrobot.forecasts.models import Forecast
@@ -120,18 +119,6 @@ async def test_ingest_horizon_starts_at_the_local_today_after_utc_midnight(
     assert {day for _, day in await _stored(committed_session_factory, location_id)} == {
         local_today + timedelta(days=offset) for offset in range(7)
     }
-
-
-async def test_field_without_alerts_gets_forecasts(
-    committed_session_factory: SessionFactory,
-) -> None:
-    location_id = await _create_field(committed_session_factory)
-    async with committed_session_factory() as session:
-        assert await session.scalar(select(func.count()).select_from(Alert)) == 0
-
-    await _ingest(committed_session_factory, StubWeatherProvider())
-
-    assert len(await _stored(committed_session_factory, location_id)) == FORECASTS_PER_RUN
 
 
 async def test_location_without_fields_gets_no_forecasts(

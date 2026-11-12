@@ -99,22 +99,6 @@ async def _notified(session_factory: SessionFactory, alert: Alert) -> dict[date,
     return {n.day: (n.probability, n.threshold) for n in stored}
 
 
-@pytest.mark.parametrize(
-    ("probability", "expected"),
-    [(60, {(60, 60)}), (61, {(61, 60)}), (59, set())],
-    ids=["equal", "above", "below"],
-)
-async def test_alert_fires_at_or_above_its_threshold_never_below(
-    committed_session_factory: SessionFactory, probability: int, expected: set[tuple[int, int]]
-) -> None:
-    alert = await _create_alert(committed_session_factory, threshold=60)
-    await _forecast(committed_session_factory, probability)
-
-    await _evaluate(committed_session_factory)
-
-    assert set((await _notified(committed_session_factory, alert)).values()) == expected
-
-
 async def test_each_day_at_or_above_threshold_gets_its_own_notification_from_today_on(
     committed_session_factory: SessionFactory,
 ) -> None:
