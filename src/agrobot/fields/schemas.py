@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic import Field as PydanticField
 
 Name = Annotated[str, PydanticField(min_length=1, max_length=200)]
@@ -20,6 +20,12 @@ class FieldUpdate(BaseModel):
     name: Name | None = None
     latitude: Latitude | None = None
     longitude: Longitude | None = None
+
+    @model_validator(mode="after")
+    def reject_nulls(self) -> Self:
+        if any(getattr(self, name) is None for name in self.model_fields_set):
+            raise ValueError("fields cannot be set to null")
+        return self
 
 
 class LocationRead(BaseModel):

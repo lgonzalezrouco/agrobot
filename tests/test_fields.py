@@ -8,7 +8,7 @@ from httpx import AsyncClient
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from agrobot.locations import repository as locations
+from agrobot.locations import service as locations
 from agrobot.locations.models import Location
 
 
@@ -55,7 +55,7 @@ async def test_register_field_returns_field_with_its_location(client: AsyncClien
         (-34.64, -58.35, -34.6, -58.4),
         (0.05, -0.05, 0.1, -0.1),
         (0.0499, -0.0499, 0.0, 0.0),
-        (89.96, 179.96, 90.0, 180.0),
+        (89.96, 179.94, 90.0, 179.9),
     ],
     ids=["south-west", "south-west-half", "boundary-up", "boundary-down", "edge"],
 )
@@ -106,6 +106,18 @@ async def test_nearby_fields_share_a_location(client: AsyncClient) -> None:
     second = await _register_field(client, user_id, -34.59, -58.42)
 
     assert first["location"] == second["location"]
+
+
+async def test_fields_on_either_side_of_the_antimeridian_share_a_location(
+    client: AsyncClient,
+) -> None:
+    user_id = await _register_user(client)
+
+    east = await _register_field(client, user_id, 0, 179.98)
+    west = await _register_field(client, user_id, 0, -179.98)
+
+    assert east["location"] == west["location"]
+    assert east["location"]["longitude"] == -180.0
 
 
 async def test_list_fields_returns_the_users_fields(client: AsyncClient) -> None:
@@ -176,6 +188,18 @@ async def test_update_field_rejects_out_of_range_coordinates(client: AsyncClient
     field = await _register_field(client, user_id, 1, 1)
 
     response = await client.patch(f"/fields/{field['id']}", json={"longitude": 181})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+@pytest.mark.parametrize("payload", [{"name": None}, {"latitude": None}, {"longitude": None}])
+async def test_update_field_rejects_null_values(
+    client: AsyncClient, payload: dict[str, None]
+) -> None:
+    user_id = await _register_user(client)
+    field = await _register_field(client, user_id, 1, 1)
+
+    response = await client.patch(f"/fields/{field['id']}", json=payload)
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 

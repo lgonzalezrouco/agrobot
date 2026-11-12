@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agrobot.core.errors import NotFoundError
 from agrobot.fields import repository
 from agrobot.fields.models import Field
-from agrobot.locations import repository as locations
+from agrobot.locations import service as locations
 from agrobot.users import service as users
 
 logger = structlog.get_logger(__name__)
