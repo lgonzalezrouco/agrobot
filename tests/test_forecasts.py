@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+import structlog
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -31,6 +32,7 @@ class StubWeatherProvider:
         self.omit: set[tuple[WeatherEventType, date]] = set()
         self.failing: set[uuid.UUID] = set()
         self.unstorable: set[uuid.UUID] = set()
+        self.hanging: set[uuid.UUID] = set()
         self.in_flight = 0
         self.peak_in_flight = 0
 
@@ -42,6 +44,8 @@ class StubWeatherProvider:
         self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
         try:
             await asyncio.sleep(0)
+            if location.id in self.hanging:
+                await asyncio.Event().wait()
         finally:
             self.in_flight -= 1
         if location.id in self.failing:
@@ -59,8 +63,11 @@ async def _ingest(
     session_factory: SessionFactory,
     provider: StubWeatherProvider,
     concurrency: int = CONCURRENCY,
+    timeout_seconds: float = 10,
 ) -> None:
-    await forecasts.ingest(session_factory, provider, concurrency=concurrency)
+    await forecasts.ingest(
+        session_factory, provider, concurrency=concurrency, timeout_seconds=timeout_seconds
+    )
 
 
 def _horizon() -> list[date]:
@@ -244,6 +251,30 @@ async def test_provider_failure_for_one_location_does_not_affect_the_others(
     assert set((await _stored(committed_session_factory, failing_id)).values()) == {10}
     assert set((await _stored(committed_session_factory, healthy_id)).values()) == {90}
     assert sorted(flaky.calls) == sorted([failing_id, healthy_id])
+
+
+async def test_provider_that_never_answers_for_one_location_does_not_affect_the_others(
+    committed_session_factory: SessionFactory,
+) -> None:
+    hanging_id = await _create_field(committed_session_factory, 1, 1)
+    healthy_id = await _create_field(committed_session_factory, 2, 2)
+    await _ingest(committed_session_factory, StubWeatherProvider(probability=10))
+    provider = StubWeatherProvider(probability=90)
+    provider.hanging.add(hanging_id)
+
+    with structlog.testing.capture_logs() as logs:
+        await asyncio.wait_for(
+            _ingest(committed_session_factory, provider, timeout_seconds=0.05), timeout=5
+        )
+
+    assert set((await _stored(committed_session_factory, hanging_id)).values()) == {10}
+    assert set((await _stored(committed_session_factory, healthy_id)).values()) == {90}
+    assert [log["location_id"] for log in logs if log["event"] == "forecasts.location_failed"] == [
+        hanging_id
+    ]
+    assert [
+        (log["ingested"], log["failed"]) for log in logs if log["event"] == "forecasts.ingested"
+    ] == [(1, 1)]
 
 
 async def test_storage_failure_for_one_location_does_not_affect_the_others(

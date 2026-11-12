@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import structlog
@@ -289,9 +290,12 @@ class StubNotificationSender:
     def __init__(self) -> None:
         self.sent: list[tuple[str, NotificationContent]] = []
         self.failing: set[str] = set()
+        self.hanging: set[str] = set()
 
     async def send(self, phone_number: str, content: NotificationContent) -> None:
         await asyncio.sleep(0)
+        if content.field_name in self.hanging:
+            await asyncio.Event().wait()
         if content.field_name in self.failing:
             raise RuntimeError("sender unavailable")
         self.sent.append((phone_number, content))
@@ -316,7 +320,7 @@ async def _pending(
     return alert
 
 
-async def _make_sends_fail(session_factory: SessionFactory, *alerts: Alert) -> None:
+async def _mark_broken(session_factory: SessionFactory, *alerts: Alert) -> None:
     async with session_factory() as session:
         await session.execute(
             update(Field)
@@ -331,9 +335,14 @@ async def _notify(
     sender: StubNotificationSender,
     batch_size: int = 100,
     max_attempts: int = 5,
+    timeout_seconds: float = 10,
 ) -> None:
     await notifications.notify(
-        session_factory, sender, batch_size=batch_size, max_attempts=max_attempts
+        session_factory,
+        sender,
+        batch_size=batch_size,
+        max_attempts=max_attempts,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -421,7 +430,7 @@ async def test_failed_send_is_retried_later_without_stopping_the_batch(
 ) -> None:
     failing = await _pending(committed_session_factory, day=_day(0), latitude=1)
     delivered = await _pending(committed_session_factory, day=_day(1), latitude=2)
-    await _make_sends_fail(committed_session_factory, failing)
+    await _mark_broken(committed_session_factory, failing)
     sender = StubNotificationSender()
     sender.failing.add("Broken")
     before = datetime.now(UTC)
@@ -437,6 +446,29 @@ async def test_failed_send_is_retried_later_without_stopping_the_batch(
     assert failed.next_attempt_at > before + timedelta(seconds=10)
     assert sent.status == NotificationStatus.SENT
     assert [content.field_name for _, content in sender.sent] == ["Lote"]
+
+
+async def test_send_that_never_answers_is_retried_later_without_stopping_the_batch(
+    committed_session_factory: SessionFactory,
+) -> None:
+    hanging = await _pending(committed_session_factory, day=_day(0), latitude=1)
+    delivered = await _pending(committed_session_factory, day=_day(1), latitude=2)
+    await _mark_broken(committed_session_factory, hanging)
+    sender = StubNotificationSender()
+    sender.hanging.add("Broken")
+    before = datetime.now(UTC)
+
+    await asyncio.wait_for(
+        _notify(committed_session_factory, sender, timeout_seconds=0.05), timeout=5
+    )
+
+    async with committed_session_factory() as session:
+        [retried] = await repository.list_for_alert(session, hanging.id)
+        [sent] = await repository.list_for_alert(session, delivered.id)
+    assert retried.status == NotificationStatus.PENDING
+    assert retried.attempts == 1
+    assert retried.next_attempt_at > before + timedelta(seconds=10)
+    assert sent.status == NotificationStatus.SENT
 
 
 async def test_retry_delay_doubles_per_attempt_up_to_one_hour(
@@ -490,7 +522,7 @@ async def test_failing_notifications_back_off_so_due_ones_still_go_out(
         for latitude in [1, 2]
     ]
     await _pending(committed_session_factory, day=_day(1), latitude=3)
-    await _make_sends_fail(committed_session_factory, *broken)
+    await _mark_broken(committed_session_factory, *broken)
     sender = StubNotificationSender()
     sender.failing.add("Broken")
 
@@ -519,7 +551,7 @@ async def test_run_logs_how_many_notifications_were_sent_retried_and_failed(
 ) -> None:
     await _pending(committed_session_factory, latitude=1)
     broken = [await _pending(committed_session_factory, latitude=n) for n in [2, 3, 4]]
-    await _make_sends_fail(committed_session_factory, *broken)
+    await _mark_broken(committed_session_factory, *broken)
     await _update_notification(committed_session_factory, broken[0], attempts=1)
     sender = StubNotificationSender()
     sender.failing.add("Broken")
@@ -642,7 +674,7 @@ async def test_expiry_skips_a_notification_locked_by_another_run_without_waiting
     assert await _status(committed_session_factory, unlocked) == NotificationStatus.EXPIRED
 
 
-async def test_notification_whose_day_ends_during_the_run_expires_instead_of_being_sent(
+async def test_notification_whose_day_ends_after_it_is_claimed_expires_instead_of_being_sent(
     committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     alerts = [
@@ -651,27 +683,45 @@ async def test_notification_whose_day_ends_during_the_run_expires_instead_of_bei
     ]
     clock = [datetime.now(UTC)]
     monkeypatch.setattr(notifications, "datetime", SimpleNamespace(now=lambda tz: clock[0]))
+    claim_due = repository.claim_due
 
-    class MidnightSender(StubNotificationSender):
-        async def send(self, phone_number: str, content: NotificationContent) -> None:
-            await super().send(phone_number, content)
-            clock[0] += timedelta(days=1)
+    async def claim_due_until_midnight(*args: Any) -> Any:
+        claimed = await claim_due(*args)
+        clock[0] += timedelta(days=1)
+        return claimed
 
-    sender = MidnightSender()
+    monkeypatch.setattr(repository, "claim_due", claim_due_until_midnight)
+    sender = StubNotificationSender()
 
     with structlog.testing.capture_logs() as logs:
         await _notify(committed_session_factory, sender)
 
-    assert len(sender.sent) == 1
-    assert sorted([await _status(committed_session_factory, alert) for alert in alerts]) == [
+    assert sender.sent == []
+    assert [await _status(committed_session_factory, alert) for alert in alerts] == [
         NotificationStatus.EXPIRED,
-        NotificationStatus.SENT,
+        NotificationStatus.EXPIRED,
     ]
     assert {
         "event": "notifications.notified",
-        "expired": 1,
-        "sent": 1,
+        "expired": 2,
+        "sent": 0,
         "retried": 0,
         "failed": 0,
         "log_level": "info",
     } in logs
+
+
+async def test_batch_is_sent_concurrently_so_hung_sends_cost_one_time_limit(
+    committed_session_factory: SessionFactory,
+) -> None:
+    hanging = [await _pending(committed_session_factory, latitude=n) for n in range(5)]
+    await _mark_broken(committed_session_factory, *hanging)
+    sender = StubNotificationSender()
+    sender.hanging.add("Broken")
+
+    await asyncio.wait_for(
+        _notify(committed_session_factory, sender, timeout_seconds=0.5), timeout=1.5
+    )
+
+    for alert in hanging:
+        assert await _status(committed_session_factory, alert) == NotificationStatus.PENDING
