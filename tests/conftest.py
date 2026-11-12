@@ -11,6 +11,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI, status
 from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -26,6 +27,7 @@ from agrobot.models import Base
 from agrobot.users.models import User
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+API_KEY = "test-api-key"
 TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
 
 
@@ -48,7 +50,7 @@ def postgres_url() -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def settings(postgres_url: str) -> Settings:
-    return Settings(database_url=postgres_url, log_level="WARNING")
+    return Settings(database_url=postgres_url, api_key=SecretStr(API_KEY), log_level="WARNING")
 
 
 @pytest.fixture(scope="session")
@@ -106,9 +108,13 @@ def app(settings: Settings, db_session: AsyncSession) -> FastAPI:
     return app
 
 
+def api_client(app: FastAPI, headers: dict[str, str] | None = None) -> AsyncClient:
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=headers)
+
+
 @pytest.fixture
 async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with api_client(app, {"X-API-Key": API_KEY}) as client:
         yield client
 
 

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     log_json: bool = False
 
     database_url: str
+    api_key: SecretStr | None = Field(default=None, min_length=1)
 
     timezone: ZoneInfo = ZoneInfo("America/Argentina/Buenos_Aires")
 

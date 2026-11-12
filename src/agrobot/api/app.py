@@ -1,11 +1,12 @@
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from agrobot.alerts import router as alerts
 from agrobot.api import health
+from agrobot.api.deps import api_key_guard
 from agrobot.core.config import Settings, get_settings
 from agrobot.core.db import create_engine, create_session_factory
 from agrobot.core.errors import ConflictError, NotFoundError
@@ -23,6 +24,8 @@ def _error_handler(status_code: int) -> Callable[[Request, Exception], Awaitable
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    if settings.api_key is None:
+        raise RuntimeError("API_KEY is not set")
     configure_logging(settings.log_level, json=settings.log_json)
 
     @asynccontextmanager
@@ -38,7 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(NotFoundError, _error_handler(status.HTTP_404_NOT_FOUND))
     app.add_exception_handler(ConflictError, _error_handler(status.HTTP_409_CONFLICT))
     app.include_router(health.router)
-    app.include_router(users.router)
-    app.include_router(fields.router)
-    app.include_router(alerts.router)
+    guard = Depends(api_key_guard(settings.api_key))
+    for router in (users.router, fields.router, alerts.router):
+        app.include_router(router, dependencies=[guard])
     return app

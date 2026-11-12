@@ -15,6 +15,9 @@ uv run uvicorn --factory agrobot.api.app:create_app    # API en http://localhost
 uv run python -m agrobot.worker ingest                 # worker de ingesta, en otra terminal
 ```
 
+Todos los endpoints salvo `/health` piden el header `X-API-Key` con el valor de `API_KEY` de `.env`.
+En `/docs` se carga con el botón *Authorize*.
+
 `uv run` instala las dependencias la primera vez. Si el puerto 5432 está ocupado, cambiá
 `POSTGRES_PORT` y el puerto de `DATABASE_URL` en `.env`.
 

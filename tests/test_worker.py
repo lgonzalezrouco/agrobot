@@ -16,7 +16,8 @@ from agrobot.worker.__main__ import JOBS, Jobs, main, parse_job
 from agrobot.worker.runner import PeriodicRunner
 from tests.conftest import TIMEZONE
 
-SETTINGS = Settings(database_url="postgresql+asyncpg://unused/unused", log_level="WARNING")
+REQUIRED_SETTINGS = {"database_url": "postgresql+asyncpg://unused/unused"}
+SETTINGS = Settings.model_validate({**REQUIRED_SETTINGS, "log_level": "WARNING"})
 
 
 async def test_run_once_executes_the_job() -> None:
@@ -116,7 +117,7 @@ def test_evaluate_job_uses_the_evaluate_interval() -> None:
 @pytest.mark.parametrize("value", [0, -1])
 def test_evaluate_interval_must_be_positive(value: float) -> None:
     with pytest.raises(ValidationError):
-        Settings(database_url="postgresql+asyncpg://unused/unused", evaluate_interval_seconds=value)
+        Settings.model_validate({**REQUIRED_SETTINGS, "evaluate_interval_seconds": value})
 
 
 def test_evaluate_interval_defaults_to_5_minutes() -> None:
@@ -145,10 +146,8 @@ def test_notify_job_uses_the_fake_sender_and_notify_settings() -> None:
 @pytest.mark.parametrize("setting", ["notify_interval_seconds", "notify_batch_size"])
 @pytest.mark.parametrize("value", [0, -1])
 def test_notify_settings_must_be_positive(setting: str, value: int) -> None:
-    with pytest.raises(ValidationError):
-        Settings.model_validate(
-            {"database_url": "postgresql+asyncpg://unused/unused", setting: value}
-        )
+    with pytest.raises(ValidationError, match=setting):
+        Settings.model_validate({**REQUIRED_SETTINGS, setting: value})
 
 
 def test_notify_settings_default_to_30_seconds_and_100_per_batch() -> None:
@@ -159,10 +158,8 @@ def test_notify_settings_default_to_30_seconds_and_100_per_batch() -> None:
 @pytest.mark.parametrize("setting", ["provider_timeout_seconds", "send_timeout_seconds"])
 @pytest.mark.parametrize("value", [0, -1])
 def test_timeouts_must_be_positive(setting: str, value: float) -> None:
-    with pytest.raises(ValidationError):
-        Settings.model_validate(
-            {"database_url": "postgresql+asyncpg://unused/unused", setting: value}
-        )
+    with pytest.raises(ValidationError, match=setting):
+        Settings.model_validate({**REQUIRED_SETTINGS, setting: value})
 
 
 def test_timeouts_default_to_10_seconds() -> None:
@@ -173,7 +170,7 @@ def test_timeouts_default_to_10_seconds() -> None:
 def test_timezone_defaults_to_buenos_aires(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TIMEZONE", raising=False)
 
-    settings = Settings(database_url="postgresql+asyncpg://unused/unused", _env_file=None)
+    settings = Settings(database_url=REQUIRED_SETTINGS["database_url"], _env_file=None)
 
     assert settings.timezone == ZoneInfo("America/Argentina/Buenos_Aires")
 
@@ -181,7 +178,8 @@ def test_timezone_defaults_to_buenos_aires(monkeypatch: pytest.MonkeyPatch) -> N
 def test_invalid_timezone_env_var_fails_loading_startup_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://unused/unused")
+    for name, value in REQUIRED_SETTINGS.items():
+        monkeypatch.setenv(name.upper(), value)
     monkeypatch.setenv("TIMEZONE", "Mars/Olympus_Mons")
     get_settings.cache_clear()
 
