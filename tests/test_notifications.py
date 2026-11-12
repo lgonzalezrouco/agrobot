@@ -329,6 +329,45 @@ async def test_after_a_move_evaluate_notifies_days_not_yet_notified_from_the_new
     }
 
 
+async def test_evaluate_overlapping_a_move_waits_and_skips_the_old_location(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    await _forecast(committed_session_factory, 60)
+    async with committed_session_factory() as moving:
+        field = (
+            await moving.scalars(
+                select(Field).where(Field.id == alert.field_id).with_for_update(of=Field)
+            )
+        ).one()
+        field.location = await locations.get_or_create(moving, 5, 1)
+        await moving.flush()
+        evaluating = asyncio.create_task(_evaluate(committed_session_factory))
+        await asyncio.sleep(0.2)
+        await moving.commit()
+    await asyncio.wait_for(evaluating, timeout=5)
+
+    assert await _notified(committed_session_factory, alert) == {}
+
+
+async def test_move_overlapping_evaluate_waits_and_deletes_what_it_created(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    async with committed_session_factory() as evaluating:
+        await evaluating.execute(
+            select(Field).where(Field.id == alert.field_id).with_for_update(read=True, of=Field)
+        )
+        evaluating.add(Notification(alert_id=alert.id, day=_day(1), probability=60, threshold=50))
+        await evaluating.flush()
+        moving = asyncio.create_task(_update_field(committed_session_factory, alert, latitude=5))
+        await asyncio.sleep(0.2)
+        await evaluating.commit()
+    await asyncio.wait_for(moving, timeout=5)
+
+    assert await _notified(committed_session_factory, alert) == {}
+
+
 async def test_new_notification_is_pending_and_due_now(
     committed_session_factory: SessionFactory,
 ) -> None:

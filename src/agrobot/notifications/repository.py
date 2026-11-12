@@ -33,6 +33,7 @@ async def create_due(session: AsyncSession, today: date) -> int:
             & (Forecast.weather_event_type == Alert.weather_event_type),
         )
         .where(Alert.active, Forecast.day >= today, Forecast.probability >= Alert.threshold)
+        .with_for_update(read=True, of=Field)
     )
     result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
         insert(Notification)
