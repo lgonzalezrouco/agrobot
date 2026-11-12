@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from typing import NamedTuple
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,11 +33,22 @@ async def create_due(session: AsyncSession, today: date) -> int:
             & (Forecast.weather_event_type == Alert.weather_event_type),
         )
         .where(Alert.active, Forecast.day >= today, Forecast.probability >= Alert.threshold)
+        .with_for_update(read=True, of=Field)
     )
     result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
         insert(Notification)
         .from_select(["alert_id", "day", "probability", "threshold"], due)
         .on_conflict_do_nothing(index_elements=[Notification.alert_id, Notification.day])
+    )
+    return result.rowcount
+
+
+async def delete_pending_for_field(session: AsyncSession, field_id: uuid.UUID) -> int:
+    result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
+        delete(Notification).where(
+            Notification.status == NotificationStatus.PENDING,
+            Notification.alert_id.in_(select(Alert.id).where(Alert.field_id == field_id)),
+        )
     )
     return result.rowcount
 

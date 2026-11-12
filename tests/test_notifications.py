@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agrobot.alerts.models import Alert
+from agrobot.fields import service as fields
 from agrobot.fields.models import Field
 from agrobot.forecasts import repository as forecasts
 from agrobot.forecasts.provider import ProviderForecast
@@ -252,6 +253,117 @@ async def test_deleting_alert_field_or_user_deletes_its_notifications(
         target_id = {Alert: alert.id, Field: field.id, User: field.user_id}[deleted]
         await session.execute(delete(deleted).where(deleted.id == target_id))
         await session.commit()
+
+    assert await _notified(committed_session_factory, alert) == {}
+
+
+async def _update_field(
+    session_factory: SessionFactory,
+    alert: Alert,
+    latitude: float | None = None,
+    name: str | None = None,
+) -> None:
+    async with session_factory() as session:
+        await fields.update(session, alert.field_id, name, latitude, None)
+
+
+async def test_moving_field_to_another_location_deletes_only_its_pending_notifications(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    other = await _create_alert(committed_session_factory, threshold=50)
+    statuses = list(NotificationStatus)
+    async with committed_session_factory() as session:
+        for offset, status in enumerate(statuses, start=1):
+            session.add(
+                Notification(
+                    alert_id=alert.id, day=_day(offset), probability=60, threshold=50, status=status
+                )
+            )
+        session.add(Notification(alert_id=other.id, day=_day(1), probability=60, threshold=50))
+        await session.commit()
+
+    await _update_field(committed_session_factory, alert, latitude=5)
+
+    assert set(await _notified(committed_session_factory, alert)) == {
+        _day(offset)
+        for offset, status in enumerate(statuses, start=1)
+        if status != NotificationStatus.PENDING
+    }
+    assert set(await _notified(committed_session_factory, other)) == {_day(1)}
+
+
+@pytest.mark.parametrize(
+    ("latitude", "name"), [(None, "Renamed"), (1.04, None)], ids=["rename", "same-location"]
+)
+async def test_renaming_field_or_moving_it_within_its_location_keeps_pending_notifications(
+    committed_session_factory: SessionFactory, latitude: float | None, name: str | None
+) -> None:
+    alert = await _pending(committed_session_factory)
+
+    await _update_field(committed_session_factory, alert, latitude=latitude, name=name)
+
+    assert await _status(committed_session_factory, alert) == NotificationStatus.PENDING
+
+
+async def test_after_a_move_evaluate_notifies_days_not_yet_notified_from_the_new_location(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    await _forecast(committed_session_factory, 60, day=_day(1))
+    await _forecast(committed_session_factory, 60, day=_day(2))
+    await _evaluate(committed_session_factory)
+    await _update_notification(committed_session_factory, alert, status=NotificationStatus.SENT)
+    await _forecast(committed_session_factory, 60, day=_day(3))
+    await _evaluate(committed_session_factory)
+    for offset, probability in [(1, 90), (2, 80), (3, 70), (4, 40)]:
+        await _forecast(committed_session_factory, probability, day=_day(offset), latitude=5)
+
+    await _update_field(committed_session_factory, alert, latitude=5)
+    await _evaluate(committed_session_factory)
+
+    assert await _notified(committed_session_factory, alert) == {
+        _day(1): (60, 50),
+        _day(2): (60, 50),
+        _day(3): (70, 50),
+    }
+
+
+async def test_evaluate_overlapping_a_move_waits_and_skips_the_old_location(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    await _forecast(committed_session_factory, 60)
+    async with committed_session_factory() as moving:
+        field = (
+            await moving.scalars(
+                select(Field).where(Field.id == alert.field_id).with_for_update(of=Field)
+            )
+        ).one()
+        field.location = await locations.get_or_create(moving, 5, 1)
+        await moving.flush()
+        evaluating = asyncio.create_task(_evaluate(committed_session_factory))
+        await asyncio.sleep(0.2)
+        await moving.commit()
+    await asyncio.wait_for(evaluating, timeout=5)
+
+    assert await _notified(committed_session_factory, alert) == {}
+
+
+async def test_move_overlapping_evaluate_waits_and_deletes_what_it_created(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    async with committed_session_factory() as evaluating:
+        await evaluating.execute(
+            select(Field).where(Field.id == alert.field_id).with_for_update(read=True, of=Field)
+        )
+        evaluating.add(Notification(alert_id=alert.id, day=_day(1), probability=60, threshold=50))
+        await evaluating.flush()
+        moving = asyncio.create_task(_update_field(committed_session_factory, alert, latitude=5))
+        await asyncio.sleep(0.2)
+        await evaluating.commit()
+    await asyncio.wait_for(moving, timeout=5)
 
     assert await _notified(committed_session_factory, alert) == {}
 
