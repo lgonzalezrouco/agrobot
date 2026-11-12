@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import structlog
@@ -673,7 +674,7 @@ async def test_expiry_skips_a_notification_locked_by_another_run_without_waiting
     assert await _status(committed_session_factory, unlocked) == NotificationStatus.EXPIRED
 
 
-async def test_notification_whose_day_ends_during_the_run_expires_instead_of_being_sent(
+async def test_notification_whose_day_ends_after_it_is_claimed_expires_instead_of_being_sent(
     committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     alerts = [
@@ -682,27 +683,45 @@ async def test_notification_whose_day_ends_during_the_run_expires_instead_of_bei
     ]
     clock = [datetime.now(UTC)]
     monkeypatch.setattr(notifications, "datetime", SimpleNamespace(now=lambda tz: clock[0]))
+    claim_due = repository.claim_due
 
-    class MidnightSender(StubNotificationSender):
-        async def send(self, phone_number: str, content: NotificationContent) -> None:
-            await super().send(phone_number, content)
-            clock[0] += timedelta(days=1)
+    async def claim_due_until_midnight(*args: Any) -> Any:
+        claimed = await claim_due(*args)
+        clock[0] += timedelta(days=1)
+        return claimed
 
-    sender = MidnightSender()
+    monkeypatch.setattr(repository, "claim_due", claim_due_until_midnight)
+    sender = StubNotificationSender()
 
     with structlog.testing.capture_logs() as logs:
         await _notify(committed_session_factory, sender)
 
-    assert len(sender.sent) == 1
-    assert sorted([await _status(committed_session_factory, alert) for alert in alerts]) == [
+    assert sender.sent == []
+    assert [await _status(committed_session_factory, alert) for alert in alerts] == [
         NotificationStatus.EXPIRED,
-        NotificationStatus.SENT,
+        NotificationStatus.EXPIRED,
     ]
     assert {
         "event": "notifications.notified",
-        "expired": 1,
-        "sent": 1,
+        "expired": 2,
+        "sent": 0,
         "retried": 0,
         "failed": 0,
         "log_level": "info",
     } in logs
+
+
+async def test_batch_is_sent_concurrently_so_hung_sends_cost_one_time_limit(
+    committed_session_factory: SessionFactory,
+) -> None:
+    hanging = [await _pending(committed_session_factory, latitude=n) for n in range(5)]
+    await _mark_broken(committed_session_factory, *hanging)
+    sender = StubNotificationSender()
+    sender.hanging.add("Broken")
+
+    await asyncio.wait_for(
+        _notify(committed_session_factory, sender, timeout_seconds=0.5), timeout=1.5
+    )
+
+    for alert in hanging:
+        assert await _status(committed_session_factory, alert) == NotificationStatus.PENDING
