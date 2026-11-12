@@ -33,18 +33,6 @@ curl localhost:8000/health   # {"status":"ok","database":"ok"}
 Los tests levantan su propio Postgres con testcontainers (sólo necesitan Docker), aplican las
 migraciones reales y corren cada test en una transacción que se revierte al final.
 
-## Pendiente
-
-Quedó afuera a propósito:
-
-- Borrar Forecasts y Notifications viejas: hoy se acumulan sin límite.
-- Una zona horaria por Location ([ADR-0007](docs/adr/0007-forecast-days-use-one-configured-timezone.md)).
-- Errores de envío permanentes: el estado `failed` existe pero nada lo usa
-  ([ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
-- Cambiar la API key sin downtime ([ADR-0008](docs/adr/0008-the-api-is-internal-called-only-by-the-whatsapp-bot.md)).
-- Los adapters reales de WhatsApp y del Weather Provider: los workers usan fakes
-  ([`docs/TASK.md`](docs/TASK.md) no pide integración con WhatsApp).
-
 ## Decisiones
 
 Las decisiones de diseño están registradas como ADRs en [`docs/adr/`](docs/adr/). El vocabulario del dominio está en [`GLOSSARY.md`](GLOSSARY.md).
