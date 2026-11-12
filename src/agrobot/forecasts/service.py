@@ -1,6 +1,5 @@
 import asyncio
-from collections.abc import Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -27,32 +26,20 @@ async def ingest(
     async with session_factory() as session:
         targets = await locations.list_with_fields(session)
     semaphore = asyncio.Semaphore(concurrency)
-    results = await asyncio.gather(
-        *(
-            _ingest_location(session_factory, provider, semaphore, location, days, timeout_seconds)
-            for location in targets
-        )
-    )
+
+    async def ingest_location(location: Location) -> bool:
+        try:
+            async with semaphore:
+                async with asyncio.timeout(timeout_seconds):
+                    forecasts = await provider.get_forecasts(location, days)
+                async with session_factory() as session:
+                    await repository.upsert(session, location.id, forecasts)
+                    await session.commit()
+        except Exception:
+            logger.exception("forecasts.location_failed", location_id=location.id)
+            return False
+        return True
+
+    results = await asyncio.gather(*(ingest_location(location) for location in targets))
     ingested = sum(results)
     logger.info("forecasts.ingested", ingested=ingested, failed=len(results) - ingested)
-
-
-async def _ingest_location(
-    session_factory: async_sessionmaker[AsyncSession],
-    provider: WeatherProvider,
-    semaphore: asyncio.Semaphore,
-    location: Location,
-    days: Sequence[date],
-    timeout_seconds: float,
-) -> bool:
-    try:
-        async with semaphore:
-            async with asyncio.timeout(timeout_seconds):
-                forecasts = await provider.get_forecasts(location, days)
-            async with session_factory() as session:
-                await repository.upsert(session, location.id, forecasts)
-                await session.commit()
-    except Exception:
-        logger.exception("forecasts.location_failed", location_id=location.id)
-        return False
-    return True

@@ -319,7 +319,7 @@ async def _pending(
     return alert
 
 
-async def _make_sends_fail(session_factory: SessionFactory, *alerts: Alert) -> None:
+async def _mark_broken(session_factory: SessionFactory, *alerts: Alert) -> None:
     async with session_factory() as session:
         await session.execute(
             update(Field)
@@ -429,7 +429,7 @@ async def test_failed_send_is_retried_later_without_stopping_the_batch(
 ) -> None:
     failing = await _pending(committed_session_factory, day=_day(0), latitude=1)
     delivered = await _pending(committed_session_factory, day=_day(1), latitude=2)
-    await _make_sends_fail(committed_session_factory, failing)
+    await _mark_broken(committed_session_factory, failing)
     sender = StubNotificationSender()
     sender.failing.add("Broken")
     before = datetime.now(UTC)
@@ -452,7 +452,7 @@ async def test_send_that_never_answers_is_retried_later_without_stopping_the_bat
 ) -> None:
     hanging = await _pending(committed_session_factory, day=_day(0), latitude=1)
     delivered = await _pending(committed_session_factory, day=_day(1), latitude=2)
-    await _make_sends_fail(committed_session_factory, hanging)
+    await _mark_broken(committed_session_factory, hanging)
     sender = StubNotificationSender()
     sender.hanging.add("Broken")
     before = datetime.now(UTC)
@@ -521,7 +521,7 @@ async def test_failing_notifications_back_off_so_due_ones_still_go_out(
         for latitude in [1, 2]
     ]
     await _pending(committed_session_factory, day=_day(1), latitude=3)
-    await _make_sends_fail(committed_session_factory, *broken)
+    await _mark_broken(committed_session_factory, *broken)
     sender = StubNotificationSender()
     sender.failing.add("Broken")
 
@@ -550,7 +550,7 @@ async def test_run_logs_how_many_notifications_were_sent_retried_and_failed(
 ) -> None:
     await _pending(committed_session_factory, latitude=1)
     broken = [await _pending(committed_session_factory, latitude=n) for n in [2, 3, 4]]
-    await _make_sends_fail(committed_session_factory, *broken)
+    await _mark_broken(committed_session_factory, *broken)
     await _update_notification(committed_session_factory, broken[0], attempts=1)
     sender = StubNotificationSender()
     sender.failing.add("Broken")
