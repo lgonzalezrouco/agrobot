@@ -30,6 +30,13 @@ async def get(session: AsyncSession, user_id: uuid.UUID) -> User:
     return user
 
 
+async def get_by_phone_number(session: AsyncSession, phone_number: str) -> User:
+    user = await repository.get_by_phone_number(session, phone_number)
+    if user is None:
+        raise NotFoundError("user not found")
+    return user
+
+
 async def delete(session: AsyncSession, user_id: uuid.UUID) -> None:
     user = await get(session, user_id)
     await repository.delete(session, user)

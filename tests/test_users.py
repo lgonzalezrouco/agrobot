@@ -68,3 +68,44 @@ async def test_delete_unknown_user_returns_404(client: AsyncClient) -> None:
     response = await client.delete(f"/users/{uuid.uuid4()}")
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+async def test_find_user_by_phone_number_returns_registered_user(client: AsyncClient) -> None:
+    created = (
+        await client.post("/users", json={"name": "Ana", "phone_number": "+5491122334455"})
+    ).json()
+
+    response = await client.get("/users", params={"phone_number": "+5491122334455"})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == created
+
+
+async def test_find_user_by_unregistered_phone_number_returns_404(client: AsyncClient) -> None:
+    response = await client.get("/users", params={"phone_number": "+5491122334455"})
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+async def test_find_deleted_user_by_phone_number_returns_404(client: AsyncClient) -> None:
+    created = (
+        await client.post("/users", json={"name": "Ana", "phone_number": "+5491122334455"})
+    ).json()
+    await client.delete(f"/users/{created['id']}")
+
+    response = await client.get("/users", params={"phone_number": "+5491122334455"})
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{}, {"phone_number": "011 2233-4455"}, {"phone_number": "5491122334455"}],
+    ids=["missing", "formatted", "missing-plus"],
+)
+async def test_find_user_rejects_missing_or_non_e164_phone_number(
+    client: AsyncClient, params: dict[str, str]
+) -> None:
+    response = await client.get("/users", params=params)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
