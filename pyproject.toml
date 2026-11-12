@@ -62,3 +62,4 @@ addopts = "-ra --strict-markers --strict-config --cov=agrobot --cov-report=term-
 
 [tool.coverage.run]
 branch = true
+concurrency = ["greenlet", "thread"]

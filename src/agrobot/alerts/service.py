@@ -7,13 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agrobot.alerts import repository
 from agrobot.alerts.models import Alert
+from agrobot.core.db import is_foreign_key_violation
 from agrobot.core.errors import ConflictError, NotFoundError
 from agrobot.fields import service as fields
 from agrobot.weather import WeatherEventType
 
 logger = structlog.get_logger(__name__)
-
-FOREIGN_KEY_VIOLATION = "23503"
 
 
 async def configure(
@@ -34,7 +33,7 @@ async def configure(
         await repository.save(session, alert)
     except IntegrityError as exc:
         await session.rollback()
-        if getattr(exc.orig, "sqlstate", None) == FOREIGN_KEY_VIOLATION:
+        if is_foreign_key_violation(exc):
             raise NotFoundError("field not found") from exc
         raise ConflictError("field already has an alert for this weather event type") from exc
     await session.commit()

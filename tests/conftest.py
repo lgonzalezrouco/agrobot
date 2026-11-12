@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, date, datetime, time, timedelta
@@ -56,6 +57,17 @@ def settings(postgres_url: str) -> Settings:
 @pytest.fixture(scope="session")
 def alembic_config() -> Config:
     return Config(str(PROJECT_ROOT / "alembic.ini"))
+
+
+async def wait_until_blocked(engine: AsyncEngine) -> None:
+    async with asyncio.timeout(5), engine.connect() as connection:
+        blocked = text(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock')"
+        )
+        while True:
+            if await connection.scalar(blocked):
+                return
+            await asyncio.sleep(0.01)
 
 
 def run_alembic(connection: Connection, config: Config, action: str, revision: str) -> None:

@@ -9,7 +9,7 @@ from fastapi import status
 from httpx import AsyncClient
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from agrobot.alerts.models import Alert
 from agrobot.fields import service as fields
@@ -24,7 +24,13 @@ from agrobot.notifications.models import Notification, NotificationStatus
 from agrobot.notifications.sender import FakeNotificationSender, NotificationContent
 from agrobot.users.models import User
 from agrobot.weather import WeatherEventType
-from tests.conftest import TIMEZONE, create_field, freeze_clock, local_evening_after_utc_midnight
+from tests.conftest import (
+    TIMEZONE,
+    create_field,
+    freeze_clock,
+    local_evening_after_utc_midnight,
+    wait_until_blocked,
+)
 
 SessionFactory = async_sessionmaker[AsyncSession]
 FROST = WeatherEventType.FROST
@@ -336,7 +342,7 @@ async def test_after_a_move_evaluate_notifies_days_not_yet_notified_from_the_new
 
 
 async def test_evaluate_overlapping_a_move_waits_and_skips_the_old_location(
-    committed_session_factory: SessionFactory,
+    committed_session_factory: SessionFactory, engine: AsyncEngine
 ) -> None:
     alert = await _create_alert(committed_session_factory, threshold=50)
     await _forecast(committed_session_factory, 60)
@@ -349,7 +355,7 @@ async def test_evaluate_overlapping_a_move_waits_and_skips_the_old_location(
         field.location = await locations.get_or_create(moving, 5, 1)
         await moving.flush()
         evaluating = asyncio.create_task(_evaluate(committed_session_factory))
-        await asyncio.sleep(0.2)
+        await wait_until_blocked(engine)
         await moving.commit()
     await asyncio.wait_for(evaluating, timeout=5)
 
@@ -357,7 +363,7 @@ async def test_evaluate_overlapping_a_move_waits_and_skips_the_old_location(
 
 
 async def test_move_overlapping_evaluate_waits_and_deletes_what_it_created(
-    committed_session_factory: SessionFactory,
+    committed_session_factory: SessionFactory, engine: AsyncEngine
 ) -> None:
     alert = await _create_alert(committed_session_factory, threshold=50)
     async with committed_session_factory() as evaluating:
@@ -367,7 +373,7 @@ async def test_move_overlapping_evaluate_waits_and_deletes_what_it_created(
         evaluating.add(Notification(alert_id=alert.id, day=_day(1), probability=60, threshold=50))
         await evaluating.flush()
         moving = asyncio.create_task(_update_field(committed_session_factory, alert, latitude=5))
-        await asyncio.sleep(0.2)
+        await wait_until_blocked(engine)
         await evaluating.commit()
     await asyncio.wait_for(moving, timeout=5)
 

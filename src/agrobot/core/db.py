@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any, ClassVar
 
 from sqlalchemy import DateTime, MetaData, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from agrobot.core.config import Settings
+
+FOREIGN_KEY_VIOLATION = "23503"
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -42,3 +45,7 @@ def create_engine(settings: Settings) -> AsyncEngine:
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)
+
+
+def is_foreign_key_violation(exc: IntegrityError) -> bool:
+    return getattr(exc.orig, "sqlstate", None) == FOREIGN_KEY_VIOLATION

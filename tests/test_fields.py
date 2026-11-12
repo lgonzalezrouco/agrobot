@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
 from fastapi import status
@@ -7,9 +8,14 @@ from httpx import AsyncClient
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from agrobot.api.app import create_app
+from agrobot.api.deps import get_session
+from agrobot.core.config import Settings
 from agrobot.locations import service as locations
 from agrobot.locations.models import Location
-from tests.conftest import register_field, register_user
+from agrobot.users import service as users
+from agrobot.users.models import User
+from tests.conftest import API_KEY, api_client, register_field, register_user, wait_until_blocked
 
 
 async def test_register_field_returns_field_with_its_location(client: AsyncClient) -> None:
@@ -231,7 +237,7 @@ async def test_concurrent_registrations_share_one_location(engine: AsyncEngine) 
         created_id = (await locations.get_or_create(first, 45.01, 45.01)).id
         try:
             racing = asyncio.create_task(locations.get_or_create(second, 45.02, 44.98))
-            await asyncio.sleep(0.2)
+            await wait_until_blocked(engine)
             await first.commit()
 
             assert (await racing).id == created_id
@@ -239,3 +245,34 @@ async def test_concurrent_registrations_share_one_location(engine: AsyncEngine) 
             await second.rollback()
             await first.execute(delete(Location).where(Location.id == created_id))
             await first.commit()
+
+
+async def test_register_field_for_a_user_deleted_concurrently_returns_404(
+    engine: AsyncEngine, settings: Settings
+) -> None:
+    async with AsyncSession(engine, expire_on_commit=False) as setup:
+        user = await users.register(setup, "Ana", "+5491100000002")
+    async with AsyncSession(engine) as deleter, AsyncSession(engine) as registerer:
+        app = create_app(settings)
+
+        async def registerer_session() -> AsyncIterator[AsyncSession]:
+            yield registerer
+
+        app.dependency_overrides[get_session] = registerer_session
+        try:
+            await deleter.execute(delete(User).where(User.id == user.id))
+            async with api_client(app, {"X-API-Key": API_KEY}) as client:
+                racing = asyncio.create_task(
+                    client.post(
+                        f"/users/{user.id}/fields",
+                        json={"name": "Lote 1", "latitude": 47.01, "longitude": 47.01},
+                    )
+                )
+                await wait_until_blocked(engine)
+                await deleter.commit()
+
+                assert (await racing).status_code == status.HTTP_404_NOT_FOUND
+        finally:
+            await registerer.rollback()
+            await deleter.execute(delete(User).where(User.id == user.id))
+            await deleter.commit()
