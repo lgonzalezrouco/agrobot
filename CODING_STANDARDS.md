@@ -64,4 +64,5 @@ mypy strict covers `src`, `tests` and `migrations`; tests are typed like product
 
 ## Language
 
-Code, identifiers, comments and agent docs are in English. The README is in Spanish.
+Code, identifiers, comments, docs and the README are in English. Only `docs/TASK.md`, the
+original task statement, is in Spanish.
