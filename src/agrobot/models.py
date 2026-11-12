@@ -1,6 +1,8 @@
 """Import every feature's models here so Alembic autogenerate sees them."""
 
 from agrobot.core.db import Base
+from agrobot.fields.models import Field
+from agrobot.locations.models import Location
 from agrobot.users.models import User
 
-__all__ = ["Base", "User"]
+__all__ = ["Base", "Field", "Location", "User"]
