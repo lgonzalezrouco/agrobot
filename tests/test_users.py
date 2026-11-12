@@ -1,5 +1,6 @@
 import uuid
 
+import pytest
 from fastapi import status
 from httpx import AsyncClient
 
@@ -14,8 +15,15 @@ async def test_register_user_returns_created_user(client: AsyncClient) -> None:
     assert body["id"]
 
 
-async def test_register_user_rejects_non_e164_phone_number(client: AsyncClient) -> None:
-    response = await client.post("/users", json={"name": "Ana", "phone_number": "011 2233-4455"})
+@pytest.mark.parametrize(
+    "phone_number",
+    ["011 2233-4455", "5491122334455", "+0491122334455", "+1234567890123456"],
+    ids=["formatted", "missing-plus", "leading-zero", "over-15-digits"],
+)
+async def test_register_user_rejects_non_e164_phone_number(
+    client: AsyncClient, phone_number: str
+) -> None:
+    response = await client.post("/users", json={"name": "Ana", "phone_number": phone_number})
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
