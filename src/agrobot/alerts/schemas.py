@@ -7,7 +7,7 @@ from pydantic import Field as PydanticField
 
 from agrobot.alerts.models import WeatherEventType
 
-Threshold = Annotated[int, PydanticField(ge=0, le=100)]
+Threshold = Annotated[int, PydanticField(strict=True, ge=0, le=100)]
 
 
 class AlertCreate(BaseModel):

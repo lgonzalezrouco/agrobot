@@ -93,7 +93,7 @@ async def test_configure_alert_accepts_threshold_bounds(
     assert alert["threshold"] == threshold
 
 
-@pytest.mark.parametrize("threshold", [-1, 101, 50.5, "high", None])
+@pytest.mark.parametrize("threshold", [-1, 101, 50.5, 50.0, "50", "high", True, None])
 async def test_configure_alert_rejects_invalid_threshold(
     client: AsyncClient, threshold: object
 ) -> None:
@@ -195,6 +195,8 @@ async def test_pause_and_resume_alert(client: AsyncClient) -> None:
         {"weather_event_type": "rain"},
         {"threshold": 101},
         {"threshold": -1},
+        {"threshold": "50"},
+        {"threshold": True},
         {"threshold": None},
         {"active": None},
     ],
