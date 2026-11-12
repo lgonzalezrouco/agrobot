@@ -26,12 +26,12 @@ async def ingest(
     async with session_factory() as session:
         targets = await locations.list_with_fields(session)
     semaphore = asyncio.Semaphore(concurrency)
-
-    async def ingest_location(location: Location) -> bool:
-        async with semaphore:
-            return await _ingest_location(session_factory, provider, location, days)
-
-    results = await asyncio.gather(*(ingest_location(location) for location in targets))
+    results = await asyncio.gather(
+        *(
+            _ingest_location(session_factory, provider, semaphore, location, days)
+            for location in targets
+        )
+    )
     ingested = sum(results)
     logger.info("forecasts.ingested", ingested=ingested, failed=len(results) - ingested)
 
@@ -39,14 +39,16 @@ async def ingest(
 async def _ingest_location(
     session_factory: async_sessionmaker[AsyncSession],
     provider: WeatherProvider,
+    semaphore: asyncio.Semaphore,
     location: Location,
     days: Sequence[date],
 ) -> bool:
     try:
-        forecasts = await provider.get_forecasts(location, days)
-        async with session_factory() as session:
-            await repository.upsert(session, location.id, forecasts)
-            await session.commit()
+        async with semaphore:
+            forecasts = await provider.get_forecasts(location, days)
+            async with session_factory() as session:
+                await repository.upsert(session, location.id, forecasts)
+                await session.commit()
     except Exception:
         logger.exception("forecasts.location_failed", location_id=location.id)
         return False
