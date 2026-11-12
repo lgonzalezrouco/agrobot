@@ -1,9 +1,8 @@
 import asyncio
 
-from sqlalchemy.ext.asyncio import AsyncEngine
+import pytest
 
-from agrobot.core.db import create_session_factory
-from agrobot.worker.jobs import heartbeat
+from agrobot.worker.__main__ import parse_job
 from agrobot.worker.runner import PeriodicRunner
 
 
@@ -41,5 +40,13 @@ async def test_stop_interrupts_the_wait_between_iterations() -> None:
     await asyncio.wait_for(task, timeout=1)
 
 
-async def test_heartbeat_reaches_the_database(engine: AsyncEngine) -> None:
-    await heartbeat(create_session_factory(engine))
+def test_ingest_is_a_known_job() -> None:
+    assert parse_job(["ingest"]) == "ingest"
+
+
+@pytest.mark.parametrize("argv", [[], ["bogus"]])
+def test_unknown_or_missing_job_fails(argv: list[str]) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        parse_job(argv)
+
+    assert exc_info.value.code == 2

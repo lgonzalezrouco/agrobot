@@ -26,6 +26,10 @@ _Avoid_: Event, phenomenon, condition
 The probability that a weather event type occurs at a location on a given future day.
 _Avoid_: Weather data, prediction, reading
 
+**Weather Provider**:
+The external service that issues forecasts for locations.
+_Avoid_: Weather API, weather service, source
+
 ### Alerting
 
 **Alert**:

@@ -12,7 +12,7 @@ cp .env.example .env
 docker compose up -d --wait db
 uv run alembic upgrade head
 uv run uvicorn --factory agrobot.api.app:create_app    # API en http://localhost:8000/docs
-uv run python -m agrobot.worker                        # worker, en otra terminal
+uv run python -m agrobot.worker ingest                 # worker de ingesta, en otra terminal
 ```
 
 `uv run` instala las dependencias la primera vez. Si el puerto 5432 está ocupado, cambiá

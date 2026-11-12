@@ -7,6 +7,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI, status
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from testcontainers.community.postgres import PostgresContainer
@@ -14,7 +15,8 @@ from testcontainers.community.postgres import PostgresContainer
 from agrobot.api.app import create_app
 from agrobot.api.deps import get_session
 from agrobot.core.config import Settings
-from agrobot.core.db import create_engine
+from agrobot.core.db import create_engine, create_session_factory
+from agrobot.models import Base
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -62,6 +64,16 @@ async def db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
             yield session
         await transaction.rollback()
+
+
+@pytest.fixture
+async def committed_session_factory(
+    engine: AsyncEngine,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    yield create_session_factory(engine)
+    async with engine.begin() as connection:
+        tables = ", ".join(table.name for table in Base.metadata.sorted_tables)
+        await connection.execute(text(f"TRUNCATE {tables} CASCADE"))
 
 
 @pytest.fixture
