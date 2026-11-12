@@ -16,7 +16,6 @@ async def register(session: AsyncSession, name: str, phone_number: str) -> User:
     try:
         await repository.add(session, user)
     except IntegrityError as exc:
-        # Rely on the unique constraint rather than a pre-check, so concurrent sign-ups can't race.
         await session.rollback()
         raise ConflictError("phone number already registered") from exc
     await session.commit()
