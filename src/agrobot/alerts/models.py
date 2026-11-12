@@ -1,10 +1,15 @@
 import uuid
+from enum import StrEnum
 
 from sqlalchemy import CheckConstraint, Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agrobot.core.db import Base, TimestampMixin, UUIDPrimaryKeyMixin
 from agrobot.weather import WeatherEventType
+
+
+def _values(members: type[StrEnum]) -> list[str]:
+    return [member.value for member in members]
 
 
 class Alert(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -19,7 +24,7 @@ class Alert(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Enum(
             WeatherEventType,
             name="weather_event_type",
-            values_callable=lambda members: [member.value for member in members],
+            values_callable=_values,
         )
     )
     threshold: Mapped[int]
