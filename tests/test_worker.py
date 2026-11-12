@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agrobot.core.config import Settings
 from agrobot.forecasts.service import ingest
-from agrobot.notifications.service import evaluate
+from agrobot.notifications.sender import FakeNotificationSender
+from agrobot.notifications.service import evaluate, notify
 from agrobot.worker.__main__ import JOBS, Jobs, main, parse_job
 from agrobot.worker.runner import PeriodicRunner
 
@@ -50,7 +51,7 @@ async def test_stop_interrupts_the_wait_between_iterations() -> None:
     await asyncio.wait_for(task, timeout=1)
 
 
-@pytest.mark.parametrize("job", ["ingest", "evaluate"])
+@pytest.mark.parametrize("job", ["ingest", "evaluate", "notify"])
 def test_known_jobs_are_accepted(job: str) -> None:
     assert parse_job([job]) == job
 
@@ -113,3 +114,32 @@ def test_evaluate_interval_must_be_positive(value: float) -> None:
 
 def test_evaluate_interval_defaults_to_5_minutes() -> None:
     assert SETTINGS.evaluate_interval_seconds == 300
+
+
+def test_notify_job_uses_the_fake_sender_and_notify_settings() -> None:
+    build_job, interval = JOBS["notify"]
+    settings = SETTINGS.model_copy(update={"notify_interval_seconds": 9, "notify_batch_size": 4})
+    session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker()
+
+    job = build_job(settings, session_factory)
+
+    assert interval(settings) == 9
+    assert isinstance(job, partial)
+    assert job.func is notify
+    assert job.args[0] is session_factory
+    assert isinstance(job.args[1], FakeNotificationSender)
+    assert job.keywords == {"batch_size": 4}
+
+
+@pytest.mark.parametrize("setting", ["notify_interval_seconds", "notify_batch_size"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_notify_settings_must_be_positive(setting: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate(
+            {"database_url": "postgresql+asyncpg://unused/unused", setting: value}
+        )
+
+
+def test_notify_settings_default_to_30_seconds_and_100_per_batch() -> None:
+    assert SETTINGS.notify_interval_seconds == 30
+    assert SETTINGS.notify_batch_size == 100

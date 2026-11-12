@@ -2,6 +2,7 @@ import asyncio
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
+import structlog
 from sqlalchemy import delete, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -14,6 +15,7 @@ from agrobot.locations import service as locations
 from agrobot.notifications import repository
 from agrobot.notifications import service as notifications
 from agrobot.notifications.models import Notification, NotificationStatus
+from agrobot.notifications.sender import FakeNotificationSender, NotificationMessage
 from agrobot.users.models import User
 from agrobot.weather import WeatherEventType
 from tests.conftest import create_field
@@ -280,3 +282,144 @@ async def test_database_rejects_snapshot_outside_0_to_100(
 
         with pytest.raises(IntegrityError):
             await session.commit()
+
+
+class StubNotificationSender:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, NotificationMessage]] = []
+        self.failing: set[str] = set()
+
+    async def send(self, phone_number: str, message: NotificationMessage) -> None:
+        await asyncio.sleep(0)
+        if message.field_name in self.failing:
+            raise RuntimeError("sender unavailable")
+        self.sent.append((phone_number, message))
+
+
+async def _pending(
+    session_factory: SessionFactory,
+    *,
+    day: date | None = None,
+    probability: int = 70,
+    threshold: int = 50,
+    latitude: float = 1,
+) -> Alert:
+    alert = await _create_alert(session_factory, threshold, latitude=latitude)
+    async with session_factory() as session:
+        session.add(
+            Notification(
+                alert_id=alert.id, day=day or _day(1), probability=probability, threshold=threshold
+            )
+        )
+        await session.commit()
+    return alert
+
+
+async def _notify(
+    session_factory: SessionFactory, sender: StubNotificationSender, batch_size: int = 100
+) -> None:
+    await notifications.notify(session_factory, sender, batch_size=batch_size)
+
+
+async def test_pending_notification_is_sent_to_the_users_phone(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory, day=_day(2), probability=80, threshold=60)
+    sender = StubNotificationSender()
+    before = datetime.now(UTC)
+
+    await _notify(committed_session_factory, sender)
+
+    async with committed_session_factory() as session:
+        field = await session.get_one(Field, alert.field_id)
+        user = await session.get_one(User, field.user_id)
+        [notification] = await repository.list_for_alert(session, alert.id)
+    assert sender.sent == [(user.phone_number, NotificationMessage("Lote", FROST, _day(2), 80, 60))]
+    assert notification.status == NotificationStatus.SENT
+    assert notification.attempts == 1
+    assert notification.sent_at is not None
+    assert before <= notification.sent_at <= datetime.now(UTC)
+
+
+async def test_each_run_claims_at_most_a_batch_earliest_day_first(
+    committed_session_factory: SessionFactory,
+) -> None:
+    for offset in [3, 0, 5, 1, 2]:
+        await _pending(committed_session_factory, day=_day(offset), latitude=offset)
+    sender = StubNotificationSender()
+
+    await _notify(committed_session_factory, sender, batch_size=2)
+    await _notify(committed_session_factory, sender, batch_size=2)
+
+    assert [message.day for _, message in sender.sent] == [_day(o) for o in [0, 1, 2, 3]]
+
+
+async def test_notification_is_sent_even_if_its_alert_was_paused_after_it_fired(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory)
+    await _update_alert(committed_session_factory, alert, active=False)
+    sender = StubNotificationSender()
+
+    await _notify(committed_session_factory, sender)
+
+    assert len(sender.sent) == 1
+
+
+async def test_failed_send_stays_pending_without_stopping_the_batch(
+    committed_session_factory: SessionFactory,
+) -> None:
+    failing = await _pending(committed_session_factory, day=_day(0), latitude=1)
+    delivered = await _pending(committed_session_factory, day=_day(1), latitude=2)
+    async with committed_session_factory() as session:
+        await session.execute(
+            update(Field).where(Field.id == failing.field_id).values(name="Broken")
+        )
+        await session.commit()
+    sender = StubNotificationSender()
+    sender.failing.add("Broken")
+
+    await _notify(committed_session_factory, sender)
+
+    async with committed_session_factory() as session:
+        [failed] = await repository.list_for_alert(session, failing.id)
+        [sent] = await repository.list_for_alert(session, delivered.id)
+    assert failed.status == NotificationStatus.PENDING
+    assert failed.sent_at is None
+    assert sent.status == NotificationStatus.SENT
+    assert [message.field_name for _, message in sender.sent] == ["Lote"]
+
+
+async def test_concurrent_runs_send_each_notification_once(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alerts = [await _pending(committed_session_factory, latitude=n) for n in range(20)]
+    sender = StubNotificationSender()
+
+    await asyncio.gather(
+        *(_notify(committed_session_factory, sender, batch_size=3) for _ in range(10))
+    )
+
+    assert len(sender.sent) == len(alerts)
+    assert len({phone_number for phone_number, _ in sender.sent}) == len(alerts)
+
+
+async def test_run_logs_how_many_notifications_were_sent(
+    committed_session_factory: SessionFactory,
+) -> None:
+    await _pending(committed_session_factory, latitude=1)
+    await _pending(committed_session_factory, latitude=2)
+
+    with structlog.testing.capture_logs() as logs:
+        await _notify(committed_session_factory, StubNotificationSender())
+
+    assert {"event": "notifications.sent", "sent": 2, "failed": 0, "log_level": "info"} in logs
+
+
+async def test_fake_sender_logs_the_message() -> None:
+    message = NotificationMessage("Lote", FROST, _day(1), 80, 60)
+
+    with structlog.testing.capture_logs() as logs:
+        await FakeNotificationSender().send("+5491122334455", message)
+
+    assert logs == [{"event": "notifications.fake_sent", "log_level": "info", **message._asdict()}]

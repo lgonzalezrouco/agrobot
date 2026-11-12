@@ -17,6 +17,9 @@ class Settings(BaseSettings):
 
     evaluate_interval_seconds: float = Field(default=300.0, gt=0)
 
+    notify_interval_seconds: float = Field(default=30.0, gt=0)
+    notify_batch_size: int = Field(default=100, gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:
