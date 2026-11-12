@@ -5,7 +5,7 @@ from functools import partial
 from zoneinfo import ZoneInfo
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agrobot.core.config import Settings, get_settings
@@ -16,7 +16,11 @@ from agrobot.worker.__main__ import JOBS, Jobs, main, parse_job
 from agrobot.worker.runner import PeriodicRunner
 from tests.conftest import TIMEZONE
 
-SETTINGS = Settings(database_url="postgresql+asyncpg://unused/unused", log_level="WARNING")
+SETTINGS = Settings(
+    database_url="postgresql+asyncpg://unused/unused",
+    api_key=SecretStr("unused"),
+    log_level="WARNING",
+)
 
 
 async def test_run_once_executes_the_job() -> None:
@@ -116,7 +120,11 @@ def test_evaluate_job_uses_the_evaluate_interval() -> None:
 @pytest.mark.parametrize("value", [0, -1])
 def test_evaluate_interval_must_be_positive(value: float) -> None:
     with pytest.raises(ValidationError):
-        Settings(database_url="postgresql+asyncpg://unused/unused", evaluate_interval_seconds=value)
+        Settings(
+            database_url="postgresql+asyncpg://unused/unused",
+            api_key=SecretStr("unused"),
+            evaluate_interval_seconds=value,
+        )
 
 
 def test_evaluate_interval_defaults_to_5_minutes() -> None:
@@ -173,7 +181,11 @@ def test_timeouts_default_to_10_seconds() -> None:
 def test_timezone_defaults_to_buenos_aires(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TIMEZONE", raising=False)
 
-    settings = Settings(database_url="postgresql+asyncpg://unused/unused", _env_file=None)
+    settings = Settings(
+        database_url="postgresql+asyncpg://unused/unused",
+        api_key=SecretStr("unused"),
+        _env_file=None,
+    )
 
     assert settings.timezone == ZoneInfo("America/Argentina/Buenos_Aires")
 
@@ -182,6 +194,7 @@ def test_invalid_timezone_env_var_fails_loading_startup_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://unused/unused")
+    monkeypatch.setenv("API_KEY", "unused")
     monkeypatch.setenv("TIMEZONE", "Mars/Olympus_Mons")
     get_settings.cache_clear()
 
