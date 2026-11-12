@@ -10,15 +10,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agrobot.alerts.models import Alert
-from agrobot.fields.models import Field
 from agrobot.forecasts import repository
 from agrobot.forecasts import service as forecasts
 from agrobot.forecasts.models import Forecast
 from agrobot.forecasts.provider import FakeWeatherProvider, ProviderForecast
 from agrobot.locations import service as locations
 from agrobot.locations.models import Location
-from agrobot.users.models import User
 from agrobot.weather import WeatherEventType
+from tests.conftest import create_field
 
 SessionFactory = async_sessionmaker[AsyncSession]
 FORECASTS_PER_RUN = len(WeatherEventType) * forecasts.HORIZON_DAYS
@@ -72,22 +71,7 @@ def _horizon() -> list[date]:
 async def _create_field(
     session_factory: SessionFactory, latitude: float = 1, longitude: float = 1
 ) -> uuid.UUID:
-    async with session_factory() as session:
-        user = User(name="Ana", phone_number=f"+549{uuid.uuid4().int % 10**10:010d}")
-        location = await locations.get_or_create(session, latitude, longitude)
-        session.add(user)
-        await session.flush()
-        session.add(
-            Field(
-                user_id=user.id,
-                name="Lote",
-                latitude=latitude,
-                longitude=longitude,
-                location=location,
-            )
-        )
-        await session.commit()
-        return location.id
+    return (await create_field(session_factory, latitude, longitude)).location_id
 
 
 async def _stored(

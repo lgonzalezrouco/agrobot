@@ -1,5 +1,4 @@
 import asyncio
-import uuid
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -14,9 +13,10 @@ from agrobot.forecasts.provider import ProviderForecast
 from agrobot.locations import service as locations
 from agrobot.notifications import repository
 from agrobot.notifications import service as notifications
-from agrobot.notifications.models import Notification
+from agrobot.notifications.models import Notification, NotificationStatus
 from agrobot.users.models import User
 from agrobot.weather import WeatherEventType
+from tests.conftest import create_field
 
 SessionFactory = async_sessionmaker[AsyncSession]
 FROST = WeatherEventType.FROST
@@ -24,32 +24,6 @@ FROST = WeatherEventType.FROST
 
 def _day(offset: int) -> date:
     return datetime.now(UTC).date() + timedelta(days=offset)
-
-
-async def _add_alert(
-    session: AsyncSession,
-    threshold: int,
-    *,
-    weather_event_type: WeatherEventType = FROST,
-    latitude: float = 1,
-    longitude: float = 1,
-    active: bool = True,
-) -> Alert:
-    user = User(name="Ana", phone_number=f"+549{uuid.uuid4().int % 10**10:010d}")
-    location = await locations.get_or_create(session, latitude, longitude)
-    session.add(user)
-    await session.flush()
-    field = Field(
-        user_id=user.id, name="Lote", latitude=latitude, longitude=longitude, location=location
-    )
-    session.add(field)
-    await session.flush()
-    alert = Alert(
-        field_id=field.id, weather_event_type=weather_event_type, threshold=threshold, active=active
-    )
-    session.add(alert)
-    await session.flush()
-    return alert
 
 
 async def _create_alert(
@@ -61,15 +35,15 @@ async def _create_alert(
     longitude: float = 1,
     active: bool = True,
 ) -> Alert:
+    field = await create_field(session_factory, latitude, longitude)
     async with session_factory() as session:
-        alert = await _add_alert(
-            session,
-            threshold,
+        alert = Alert(
+            field_id=field.id,
             weather_event_type=weather_event_type,
-            latitude=latitude,
-            longitude=longitude,
+            threshold=threshold,
             active=active,
         )
+        session.add(alert)
         await session.commit()
         return alert
 
@@ -262,26 +236,47 @@ async def test_deleting_alert_field_or_user_deletes_its_notifications(
     assert await _notified(committed_session_factory, alert) == {}
 
 
-async def test_database_rejects_a_second_notification_for_the_same_alert_and_day(
-    db_session: AsyncSession,
+async def test_new_notification_is_pending_and_due_now(
+    committed_session_factory: SessionFactory,
 ) -> None:
-    alert = await _add_alert(db_session, threshold=50)
-    db_session.add(Notification(alert_id=alert.id, day=_day(1), probability=60, threshold=50))
-    await db_session.flush()
-    db_session.add(Notification(alert_id=alert.id, day=_day(1), probability=70, threshold=50))
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    await _forecast(committed_session_factory, 60)
+    before = datetime.now(UTC)
 
-    with pytest.raises(IntegrityError):
-        await db_session.flush()
+    await notifications.evaluate(committed_session_factory)
+
+    async with committed_session_factory() as session:
+        [notification] = await repository.list_for_alert(session, alert.id)
+    assert notification.status == NotificationStatus.PENDING
+    assert notification.attempts == 0
+    assert notification.sent_at is None
+    assert before <= notification.next_attempt_at <= datetime.now(UTC)
+
+
+async def test_database_rejects_a_second_notification_for_the_same_alert_and_day(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    async with committed_session_factory() as session:
+        session.add(Notification(alert_id=alert.id, day=_day(1), probability=60, threshold=50))
+        await session.commit()
+        session.add(Notification(alert_id=alert.id, day=_day(1), probability=70, threshold=50))
+
+        with pytest.raises(IntegrityError):
+            await session.commit()
 
 
 @pytest.mark.parametrize(("probability", "threshold"), [(-1, 50), (101, 50), (60, -1), (60, 101)])
 async def test_database_rejects_snapshot_outside_0_to_100(
-    db_session: AsyncSession, probability: int, threshold: int
+    committed_session_factory: SessionFactory, probability: int, threshold: int
 ) -> None:
-    alert = await _add_alert(db_session, threshold=50)
-    db_session.add(
-        Notification(alert_id=alert.id, day=_day(1), probability=probability, threshold=threshold)
-    )
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    async with committed_session_factory() as session:
+        session.add(
+            Notification(
+                alert_id=alert.id, day=_day(1), probability=probability, threshold=threshold
+            )
+        )
 
-    with pytest.raises(IntegrityError):
-        await db_session.flush()
+        with pytest.raises(IntegrityError):
+            await session.commit()

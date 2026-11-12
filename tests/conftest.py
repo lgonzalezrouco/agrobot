@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,10 @@ from agrobot.api.app import create_app
 from agrobot.api.deps import get_session
 from agrobot.core.config import Settings
 from agrobot.core.db import create_engine, create_session_factory
+from agrobot.fields.models import Field
+from agrobot.locations import service as locations
 from agrobot.models import Base
+from agrobot.users.models import User
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -114,3 +118,19 @@ async def register_field(
     assert response.status_code == status.HTTP_201_CREATED
     body: dict[str, Any] = response.json()
     return body
+
+
+async def create_field(
+    session_factory: async_sessionmaker[AsyncSession], latitude: float = 1, longitude: float = 1
+) -> Field:
+    async with session_factory() as session:
+        user = User(name="Ana", phone_number=f"+549{uuid.uuid4().int % 10**10:010d}")
+        location = await locations.get_or_create(session, latitude, longitude)
+        session.add(user)
+        await session.flush()
+        field = Field(
+            user_id=user.id, name="Lote", latitude=latitude, longitude=longitude, location=location
+        )
+        session.add(field)
+        await session.commit()
+        return field
