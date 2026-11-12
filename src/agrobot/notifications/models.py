@@ -48,6 +48,9 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     next_attempt_at: Mapped[datetime] = mapped_column(server_default=func.now())
     sent_at: Mapped[datetime | None]
 
+    def lease_until(self, until: datetime) -> None:
+        self.next_attempt_at = until
+
     def mark_sent(self) -> None:
         self.attempts += 1
         self.status = NotificationStatus.SENT

@@ -1,14 +1,15 @@
 import asyncio
 import uuid
-from datetime import UTC, datetime
+from collections import Counter
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agrobot.notifications import repository
-from agrobot.notifications.models import Notification
-from agrobot.notifications.sender import NotificationContent, NotificationSender
+from agrobot.notifications.models import Notification, NotificationStatus
+from agrobot.notifications.sender import NotificationSender
 
 logger = structlog.get_logger(__name__)
 
@@ -26,6 +27,13 @@ async def evaluate(
     logger.info("notifications.evaluated", created=created)
 
 
+_MARKS = {
+    "expired": Notification.mark_expired,
+    "sent": Notification.mark_sent,
+    "retried": Notification.mark_send_failed,
+}
+
+
 async def notify(
     session_factory: async_sessionmaker[AsyncSession],
     sender: NotificationSender,
@@ -34,44 +42,46 @@ async def notify(
     timeout_seconds: float,
     timezone: ZoneInfo,
 ) -> None:
-    sent = retried = 0
-    now = datetime.now(UTC)
+    started_at = datetime.now(UTC)
+    lease = timedelta(seconds=batch_size * timeout_seconds)
+    outcomes: Counter[str] = Counter()
     async with session_factory() as session:
-        expired = await repository.expire_past(session, datetime.now(timezone).date())
+        outcomes["expired"] = await repository.expire_past(session, datetime.now(timezone).date())
         await session.commit()
-        claimed = await repository.claim_due(session, now, batch_size)
-        today = datetime.now(timezone).date()
-        due = []
-        for notification, phone_number, content in claimed:
-            if notification.day < today:
-                notification.mark_expired()
-                expired += 1
-            else:
-                due.append((notification, phone_number, content))
 
-        async def send(
-            notification: Notification, phone_number: str, content: NotificationContent
-        ) -> bool:
+    async def deliver(claim: repository.ClaimedNotification, today: date) -> str:
+        outcome = "expired"
+        if claim.notification.day >= today:
             try:
                 async with asyncio.timeout(timeout_seconds):
-                    await sender.send(phone_number, content)
+                    await sender.send(claim.phone_number, claim.content)
+                outcome = "sent"
             except Exception:
-                logger.exception("notifications.send_failed", notification_id=notification.id)
-                return False
-            return True
+                logger.exception("notifications.send_failed", notification_id=claim.notification.id)
+                outcome = "retried"
+        async with session_factory() as session:
+            notification = await session.get(
+                Notification, claim.notification.id, with_for_update=True
+            )
+            if notification is not None and notification.status == NotificationStatus.PENDING:
+                _MARKS[outcome](notification)
+                await session.commit()
+        return outcome
 
-        results = await asyncio.gather(*(send(*claim) for claim in due))
-        for (notification, _, _), delivered in zip(due, results, strict=True):
-            if delivered:
-                notification.mark_sent()
-                sent += 1
-            else:
-                notification.mark_send_failed()
-                retried += 1
-        await session.commit()
+    while True:
+        async with session_factory() as session:
+            claimed = await repository.claim_due(session, started_at, batch_size)
+            leased_until = datetime.now(UTC) + lease
+            for claim in claimed:
+                claim.notification.lease_until(leased_until)
+            await session.commit()
+        today = datetime.now(timezone).date()
+        outcomes.update(await asyncio.gather(*(deliver(claim, today) for claim in claimed)))
+        if len(claimed) < batch_size:
+            break
     logger.info(
         "notifications.notified",
-        expired=expired,
-        sent=sent,
-        retried=retried,
+        expired=outcomes["expired"],
+        sent=outcomes["sent"],
+        retried=outcomes["retried"],
     )

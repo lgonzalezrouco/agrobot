@@ -74,7 +74,9 @@ class ClaimedNotification(NamedTuple):
     content: NotificationContent
 
 
-async def claim_due(session: AsyncSession, now: datetime, limit: int) -> list[ClaimedNotification]:
+async def claim_due(
+    session: AsyncSession, due_by: datetime, limit: int
+) -> list[ClaimedNotification]:
     rows = await session.execute(
         select(Notification, User.phone_number, Field.name, Alert.weather_event_type)
         .join(Alert, Alert.id == Notification.alert_id)
@@ -82,7 +84,7 @@ async def claim_due(session: AsyncSession, now: datetime, limit: int) -> list[Cl
         .join(User, User.id == Field.user_id)
         .where(
             Notification.status == NotificationStatus.PENDING,
-            Notification.next_attempt_at <= now,
+            Notification.next_attempt_at <= due_by,
         )
         .order_by(Notification.day, Notification.next_attempt_at)
         .limit(limit)
