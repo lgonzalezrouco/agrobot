@@ -1,7 +1,10 @@
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from alembic import command
@@ -23,6 +26,18 @@ from agrobot.models import Base
 from agrobot.users.models import User
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
+
+
+def local_evening_after_utc_midnight() -> tuple[datetime, date]:
+    instant = datetime.combine(datetime.now(UTC).date() + timedelta(days=1), time(1), UTC)
+    local_today = instant.astimezone(TIMEZONE).date()
+    assert local_today < instant.date()
+    return instant, local_today
+
+
+def freeze_clock(monkeypatch: pytest.MonkeyPatch, module: ModuleType, instant: datetime) -> None:
+    monkeypatch.setattr(module, "datetime", SimpleNamespace(now=instant.astimezone))
 
 
 @pytest.fixture(scope="session")
