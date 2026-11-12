@@ -16,7 +16,7 @@ async def register_user(payload: UserCreate, session: SessionDep) -> User:
 
 
 @router.get("", response_model=UserRead)
-async def find_user_by_phone_number(phone_number: E164PhoneNumber, session: SessionDep) -> User:
+async def get_user_by_phone_number(phone_number: E164PhoneNumber, session: SessionDep) -> User:
     return await service.get_by_phone_number(session, phone_number)
 
 

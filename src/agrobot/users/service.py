@@ -23,18 +23,18 @@ async def register(session: AsyncSession, name: str, phone_number: str) -> User:
     return user
 
 
-async def get(session: AsyncSession, user_id: uuid.UUID) -> User:
-    user = await repository.get(session, user_id)
+def _found(user: User | None) -> User:
     if user is None:
         raise NotFoundError("user not found")
     return user
+
+
+async def get(session: AsyncSession, user_id: uuid.UUID) -> User:
+    return _found(await repository.get(session, user_id))
 
 
 async def get_by_phone_number(session: AsyncSession, phone_number: str) -> User:
-    user = await repository.get_by_phone_number(session, phone_number)
-    if user is None:
-        raise NotFoundError("user not found")
-    return user
+    return _found(await repository.get_by_phone_number(session, phone_number))
 
 
 async def delete(session: AsyncSession, user_id: uuid.UUID) -> None:
