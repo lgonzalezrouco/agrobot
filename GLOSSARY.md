@@ -41,5 +41,5 @@ The probability (0–100%) at or above which an alert fires.
 _Avoid_: Limit, trigger level
 
 **Notification**:
-The record created when a forecast reaches an alert's threshold, which is then delivered to the user.
+The record created when a forecast for one day reaches an alert's threshold, which is then delivered to the user. An alert produces at most one notification per forecast day.
 _Avoid_: Alert (for the fired instance), message, event
