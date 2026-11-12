@@ -28,7 +28,12 @@ async def main() -> None:
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     runner = PeriodicRunner(
-        partial(ingest, session_factory, FakeWeatherProvider()),
+        partial(
+            ingest,
+            session_factory,
+            FakeWeatherProvider(),
+            concurrency=settings.ingest_concurrency,
+        ),
         interval_seconds=settings.ingest_interval_seconds,
     )
 

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -21,6 +22,7 @@ from agrobot.weather import WeatherEventType
 
 SessionFactory = async_sessionmaker[AsyncSession]
 FORECASTS_PER_RUN = len(WeatherEventType) * forecasts.HORIZON_DAYS
+CONCURRENCY = 10
 
 
 class StubWeatherProvider:
@@ -28,11 +30,22 @@ class StubWeatherProvider:
         self.probability = probability
         self.calls: list[uuid.UUID] = []
         self.omit: set[tuple[WeatherEventType, date]] = set()
+        self.failing: set[uuid.UUID] = set()
+        self.in_flight = 0
+        self.peak_in_flight = 0
 
     async def get_forecasts(
         self, location: Location, days: Sequence[date]
     ) -> list[ProviderForecast]:
         self.calls.append(location.id)
+        self.in_flight += 1
+        self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(0.01)
+        finally:
+            self.in_flight -= 1
+        if location.id in self.failing:
+            raise RuntimeError("provider unavailable")
         return [
             ProviderForecast(weather_event_type, day, self.probability)
             for weather_event_type in WeatherEventType
@@ -81,7 +94,9 @@ async def test_ingest_stores_every_weather_event_type_for_the_7_day_horizon(
     location_id = await _create_field(committed_session_factory)
     horizon = _horizon()
 
-    await forecasts.ingest(committed_session_factory, StubWeatherProvider(probability=42))
+    await forecasts.ingest(
+        committed_session_factory, StubWeatherProvider(probability=42), concurrency=CONCURRENCY
+    )
 
     assert await _stored(committed_session_factory, location_id) == {
         (weather_event_type, day): 42 for weather_event_type in WeatherEventType for day in horizon
@@ -95,7 +110,9 @@ async def test_field_without_alerts_gets_forecasts(
     async with committed_session_factory() as session:
         assert await session.scalar(select(func.count()).select_from(Alert)) == 0
 
-    await forecasts.ingest(committed_session_factory, StubWeatherProvider())
+    await forecasts.ingest(
+        committed_session_factory, StubWeatherProvider(), concurrency=CONCURRENCY
+    )
 
     assert len(await _stored(committed_session_factory, location_id)) == FORECASTS_PER_RUN
 
@@ -108,7 +125,7 @@ async def test_location_without_fields_gets_no_forecasts(
         await session.commit()
     provider = StubWeatherProvider()
 
-    await forecasts.ingest(committed_session_factory, provider)
+    await forecasts.ingest(committed_session_factory, provider, concurrency=CONCURRENCY)
 
     assert await _stored(committed_session_factory, empty.id) == {}
     assert provider.calls == []
@@ -121,7 +138,7 @@ async def test_fields_sharing_a_location_get_one_provider_call(
     assert await _create_field(committed_session_factory, 1.02, 1.02) == location_id
     provider = StubWeatherProvider()
 
-    await forecasts.ingest(committed_session_factory, provider)
+    await forecasts.ingest(committed_session_factory, provider, concurrency=CONCURRENCY)
 
     assert provider.calls == [location_id]
     assert len(await _stored(committed_session_factory, location_id)) == FORECASTS_PER_RUN
@@ -131,9 +148,13 @@ async def test_second_run_overwrites_probabilities(
     committed_session_factory: SessionFactory,
 ) -> None:
     location_id = await _create_field(committed_session_factory)
-    await forecasts.ingest(committed_session_factory, StubWeatherProvider(probability=10))
+    await forecasts.ingest(
+        committed_session_factory, StubWeatherProvider(probability=10), concurrency=CONCURRENCY
+    )
 
-    await forecasts.ingest(committed_session_factory, StubWeatherProvider(probability=90))
+    await forecasts.ingest(
+        committed_session_factory, StubWeatherProvider(probability=90), concurrency=CONCURRENCY
+    )
 
     assert set((await _stored(committed_session_factory, location_id)).values()) == {90}
 
@@ -143,11 +164,13 @@ async def test_forecast_omitted_by_the_provider_keeps_its_previous_value(
 ) -> None:
     location_id = await _create_field(committed_session_factory)
     omitted = (WeatherEventType.HAIL, _horizon()[3])
-    await forecasts.ingest(committed_session_factory, StubWeatherProvider(probability=10))
+    await forecasts.ingest(
+        committed_session_factory, StubWeatherProvider(probability=10), concurrency=CONCURRENCY
+    )
     revised = StubWeatherProvider(probability=90)
     revised.omit.add(omitted)
 
-    await forecasts.ingest(committed_session_factory, revised)
+    await forecasts.ingest(committed_session_factory, revised, concurrency=CONCURRENCY)
 
     stored = await _stored(committed_session_factory, location_id)
     assert stored.pop(omitted) == 10
@@ -221,3 +244,34 @@ async def test_fake_provider_depends_on_coordinate_values_not_their_spelling() -
     )
 
     assert short == padded
+
+
+async def test_provider_failure_for_one_location_does_not_affect_the_others(
+    committed_session_factory: SessionFactory,
+) -> None:
+    failing_id = await _create_field(committed_session_factory, 1, 1)
+    healthy_id = await _create_field(committed_session_factory, 2, 2)
+    await forecasts.ingest(
+        committed_session_factory, StubWeatherProvider(probability=10), concurrency=CONCURRENCY
+    )
+    flaky = StubWeatherProvider(probability=90)
+    flaky.failing.add(failing_id)
+
+    await forecasts.ingest(committed_session_factory, flaky, concurrency=CONCURRENCY)
+
+    assert set((await _stored(committed_session_factory, failing_id)).values()) == {10}
+    assert set((await _stored(committed_session_factory, healthy_id)).values()) == {90}
+    assert sorted(flaky.calls) == sorted([failing_id, healthy_id])
+
+
+async def test_locations_are_fetched_concurrently_up_to_the_limit(
+    committed_session_factory: SessionFactory,
+) -> None:
+    location_ids = [await _create_field(committed_session_factory, n, n) for n in range(5)]
+    provider = StubWeatherProvider()
+
+    await forecasts.ingest(committed_session_factory, provider, concurrency=2)
+
+    assert provider.peak_in_flight == 2
+    for location_id in location_ids:
+        assert len(await _stored(committed_session_factory, location_id)) == FORECASTS_PER_RUN
