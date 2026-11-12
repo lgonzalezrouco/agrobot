@@ -419,11 +419,14 @@ class StubNotificationSender:
         self.sent: list[tuple[str, NotificationContent]] = []
         self.failing: set[str] = set()
         self.hanging: set[str] = set()
+        self.started = asyncio.Event()
+        self.released = asyncio.Event()
 
     async def send(self, phone_number: str, content: NotificationContent) -> None:
+        self.started.set()
         await asyncio.sleep(0)
         if content.field_name in self.hanging:
-            await asyncio.Event().wait()
+            await self.released.wait()
         if content.field_name in self.failing:
             raise RuntimeError("sender unavailable")
         self.sent.append((phone_number, content))
@@ -513,7 +516,7 @@ async def test_pending_notification_is_sent_to_the_users_phone(
     assert before <= notification.sent_at <= datetime.now(UTC)
 
 
-async def test_each_run_claims_at_most_a_batch_earliest_day_first(
+async def test_backlog_larger_than_a_batch_is_fully_sent_in_one_run_earliest_day_first(
     committed_session_factory: SessionFactory,
 ) -> None:
     for offset in [3, 0, 5, 1, 2]:
@@ -521,9 +524,8 @@ async def test_each_run_claims_at_most_a_batch_earliest_day_first(
     sender = StubNotificationSender()
 
     await _notify(committed_session_factory, sender, batch_size=2)
-    await _notify(committed_session_factory, sender, batch_size=2)
 
-    assert [content.day for _, content in sender.sent] == [_day(o) for o in [0, 1, 2, 3]]
+    assert [content.day for _, content in sender.sent] == [_day(o) for o in [0, 1, 2, 3, 5]]
 
 
 async def test_within_a_day_the_longest_waiting_notification_is_claimed_first(
@@ -540,8 +542,12 @@ async def test_within_a_day_the_longest_waiting_notification_is_claimed_first(
 
     await _notify(committed_session_factory, StubNotificationSender(), batch_size=1)
 
-    assert await _status(committed_session_factory, waiting) == NotificationStatus.SENT
-    assert await _status(committed_session_factory, recent) == NotificationStatus.PENDING
+    async with committed_session_factory() as session:
+        [[first], [second]] = [
+            await repository.list_for_alert(session, alert.id) for alert in [waiting, recent]
+        ]
+    assert first.sent_at is not None and second.sent_at is not None
+    assert first.sent_at < second.sent_at
 
 
 async def test_notification_is_sent_even_if_its_alert_was_paused_after_it_fired(
@@ -877,3 +883,68 @@ async def test_batch_is_sent_concurrently_so_hung_sends_cost_one_time_limit(
 
     for alert in hanging:
         assert await _status(committed_session_factory, alert) == NotificationStatus.PENDING
+
+
+async def _crash_while_sending(
+    session_factory: SessionFactory, hanging: Alert, sender: StubNotificationSender
+) -> None:
+    await _mark_broken(session_factory, hanging)
+    sender.hanging.add("Broken")
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(_notify(session_factory, sender), timeout=0.5)
+
+
+async def test_crash_while_sending_one_notification_keeps_the_others_sent(
+    committed_session_factory: SessionFactory,
+) -> None:
+    done = [await _pending(committed_session_factory, latitude=n) for n in [1, 2]]
+    hanging = await _pending(committed_session_factory, latitude=3)
+    sender = StubNotificationSender()
+
+    await _crash_while_sending(committed_session_factory, hanging, sender)
+
+    assert [await _status(committed_session_factory, alert) for alert in done] == [
+        NotificationStatus.SENT,
+        NotificationStatus.SENT,
+    ]
+    assert await _status(committed_session_factory, hanging) == NotificationStatus.PENDING
+
+
+async def test_notification_claimed_by_a_crashed_run_is_sent_once_its_lease_has_ended(
+    committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hanging = await _pending(committed_session_factory)
+    before = datetime.now(UTC)
+    await _crash_while_sending(committed_session_factory, hanging, StubNotificationSender())
+    lease = timedelta(seconds=100 * 10)
+    sender = StubNotificationSender()
+
+    freeze_clock(monkeypatch, notifications, before + lease - timedelta(seconds=10))
+    await _notify(committed_session_factory, sender)
+    assert sender.sent == []
+
+    freeze_clock(monkeypatch, notifications, datetime.now(UTC) + lease + timedelta(seconds=1))
+    await _notify(committed_session_factory, sender)
+    assert len(sender.sent) == 1
+
+
+async def test_deleting_an_alert_while_its_notification_is_being_sent_does_not_wait(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory)
+    await _mark_broken(committed_session_factory, alert)
+    sender = StubNotificationSender()
+    sender.hanging.add("Broken")
+    run = asyncio.create_task(_notify(committed_session_factory, sender))
+    await sender.started.wait()
+
+    async with committed_session_factory() as session:
+        await asyncio.wait_for(
+            session.execute(delete(Alert).where(Alert.id == alert.id)), timeout=2
+        )
+        await session.commit()
+    sender.released.set()
+    await run
+
+    async with committed_session_factory() as session:
+        assert await repository.list_for_alert(session, alert.id) == []
