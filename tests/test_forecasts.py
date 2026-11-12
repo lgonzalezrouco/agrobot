@@ -89,8 +89,10 @@ async def _stored(
     session_factory: SessionFactory, location_id: uuid.UUID
 ) -> dict[tuple[WeatherEventType, date], int]:
     async with session_factory() as session:
-        forecasts = await repository.list_for_location(session, location_id)
-    return {(f.weather_event_type, f.day): f.probability for f in forecasts}
+        forecasts = await session.scalars(
+            select(Forecast).where(Forecast.location_id == location_id)
+        )
+        return {(f.weather_event_type, f.day): f.probability for f in forecasts}
 
 
 async def test_ingest_stores_every_weather_event_type_for_the_7_day_horizon(

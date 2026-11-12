@@ -1,22 +1,12 @@
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agrobot.forecasts.models import Forecast
 from agrobot.forecasts.provider import ProviderForecast
-
-
-async def list_for_location(session: AsyncSession, location_id: uuid.UUID) -> Sequence[Forecast]:
-    return (
-        await session.scalars(
-            select(Forecast)
-            .where(Forecast.location_id == location_id)
-            .order_by(Forecast.weather_event_type, Forecast.day)
-        )
-    ).all()
 
 
 async def upsert(
