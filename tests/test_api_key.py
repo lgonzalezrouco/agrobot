@@ -1,16 +1,10 @@
 import pytest
 from fastapi import FastAPI, status
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from pydantic import ValidationError
 
 from agrobot.core.config import Settings
-from tests.conftest import register_field, register_user
-
-ANA = {"name": "Ana", "phone_number": "+5491122334455"}
-
-
-def unauthenticated(app: FastAPI, headers: dict[str, str]) -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=headers)
+from tests.conftest import api_client, register_field, register_user
 
 
 @pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong-key"}])
@@ -20,9 +14,9 @@ async def test_request_without_the_right_api_key_is_rejected_and_changes_nothing
     user_id = await register_user(client)
     field = await register_field(client, user_id)
 
-    async with unauthenticated(app, headers) as intruder:
+    async with api_client(app, headers) as intruder:
         responses = [
-            await intruder.post("/users", json={**ANA, "phone_number": "+5491100000000"}),
+            await intruder.post("/users", json={"name": "Beto", "phone_number": "+5491100000000"}),
             await intruder.delete(f"/users/{user_id}"),
             await intruder.delete(f"/fields/{field['id']}"),
             await intruder.post(
@@ -38,13 +32,13 @@ async def test_request_without_the_right_api_key_is_rejected_and_changes_nothing
 
 
 async def test_request_with_the_right_api_key_is_served(client: AsyncClient) -> None:
-    response = await client.post("/users", json=ANA)
+    user_id = await register_user(client)
 
-    assert response.status_code == status.HTTP_201_CREATED
+    assert (await client.get(f"/users/{user_id}")).status_code == status.HTTP_200_OK
 
 
 async def test_health_answers_without_api_key(app: FastAPI) -> None:
-    async with unauthenticated(app, {}) as anonymous:
+    async with api_client(app) as anonymous:
         response = await anonymous.get("/health")
 
     assert response.status_code == status.HTTP_200_OK

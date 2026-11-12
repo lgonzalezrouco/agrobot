@@ -1,12 +1,13 @@
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, status
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy.exc import OperationalError
 
 from agrobot.api.app import create_app
 from agrobot.api.deps import get_session
 from agrobot.core.config import Settings
+from tests.conftest import api_client
 
 
 async def test_health_reports_ok_when_database_is_reachable(client: AsyncClient) -> None:
@@ -21,7 +22,7 @@ async def test_health_end_to_end_through_app_lifespan(settings: Settings) -> Non
 
     async with (
         app.router.lifespan_context(app),
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+        api_client(app) as client,
     ):
         response = await client.get("/health")
 
@@ -38,7 +39,7 @@ async def test_health_reports_503_when_database_is_unreachable(app: FastAPI) -> 
 
     app.dependency_overrides[get_session] = broken_session
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with api_client(app) as client:
         response = await client.get("/health")
 
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE

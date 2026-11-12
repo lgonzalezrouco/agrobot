@@ -108,11 +108,13 @@ def app(settings: Settings, db_session: AsyncSession) -> FastAPI:
     return app
 
 
+def api_client(app: FastAPI, headers: dict[str, str] | None = None) -> AsyncClient:
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=headers)
+
+
 @pytest.fixture
 async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test", headers={"X-API-Key": API_KEY}
-    ) as client:
+    async with api_client(app, {"X-API-Key": API_KEY}) as client:
         yield client
 
 

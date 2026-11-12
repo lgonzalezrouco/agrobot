@@ -39,8 +39,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(NotFoundError, _error_handler(status.HTTP_404_NOT_FOUND))
     app.add_exception_handler(ConflictError, _error_handler(status.HTTP_409_CONFLICT))
     app.include_router(health.router)
-    guarded = [Depends(api_key_guard(settings.api_key))]
-    app.include_router(users.router, dependencies=guarded)
-    app.include_router(fields.router, dependencies=guarded)
-    app.include_router(alerts.router, dependencies=guarded)
+    guard = Depends(api_key_guard(settings.api_key))
+    for router in (users.router, fields.router, alerts.router):
+        app.include_router(router, dependencies=[guard])
     return app
