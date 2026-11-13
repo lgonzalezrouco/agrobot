@@ -117,9 +117,10 @@ migrations, and run each test in a transaction that is rolled back at the end.
 - All Users share one timezone
   ([ADR-0007](docs/adr/0007-forecast-days-use-one-configured-timezone.md)).
 - Scale: on a laptop with 1M Alerts across 50k Locations, the first `evaluate` run takes about 27 s,
-  and a run with nothing new to create takes about 7.5 s. A Field update waits at most 0.15 s for a
-  run in progress
-  ([ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
+  and a run with nothing new to create takes about 7.5 s (2.5× slower than before batching). A Field
+  update waits at most 0.06 s for a run in progress
+  ([benchmark](https://github.com/lgonzalezrouco/agrobot/pull/54#issuecomment-6855313041),
+  [ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
 
 ## Decisions
 
