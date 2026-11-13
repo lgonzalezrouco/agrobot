@@ -252,6 +252,39 @@ async def test_small_batches_cover_every_location_like_a_single_pass(
         assert await _notified(committed_session_factory, alert) == {_day(1): (60 + n, 50)}
 
 
+async def test_database_error_in_one_batch_does_not_stop_the_later_ones(
+    committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alerts = [
+        await _create_alert(committed_session_factory, threshold=50, latitude=n) for n in range(3)
+    ]
+    for n in range(3):
+        await _forecast(committed_session_factory, 60, latitude=n)
+    async with committed_session_factory() as session:
+        location_of = {
+            alert: (await session.get_one(Field, alert.field_id)).location_id for alert in alerts
+        }
+    first, broken, last = sorted(alerts, key=location_of.__getitem__)
+    create_due = repository.create_due
+
+    async def create_due_failing_for_broken(
+        session: AsyncSession, today: date, location_ids: Sequence[uuid.UUID]
+    ) -> int:
+        if location_of[broken] in location_ids:
+            raise OperationalError("INSERT INTO notifications", {}, ConnectionError("lost"))
+        return await create_due(session, today, location_ids)
+
+    monkeypatch.setattr(repository, "create_due", create_due_failing_for_broken)
+
+    with structlog.testing.capture_logs() as logs:
+        await _evaluate(committed_session_factory, batch_size=1)
+
+    assert await _notified(committed_session_factory, broken) == {}
+    for alert in (first, last):
+        assert set(await _notified(committed_session_factory, alert)) == {_day(1)}
+    assert [log["errors"] for log in logs if log["event"] == "notifications.evaluated"] == [1]
+
+
 async def test_field_update_waits_only_for_the_batch_holding_its_location(
     committed_session_factory: SessionFactory, engine: AsyncEngine
 ) -> None:

@@ -44,17 +44,21 @@ async def evaluate(
     session_factory: async_sessionmaker[AsyncSession], *, batch_size: int, timezone: ZoneInfo
 ) -> None:
     today = datetime.now(timezone).date()
-    created = 0
+    created = errors = 0
     after = uuid.UUID(int=0)
     while True:
         async with session_factory() as session:
             location_ids = await locations.ids_with_fields_after(session, after, batch_size)
-            created += await repository.create_due(session, today, location_ids)
-            await session.commit()
+            try:
+                created += await repository.create_due(session, today, location_ids)
+                await session.commit()
+            except SQLAlchemyError:
+                logger.exception("notifications.evaluate_failed", location_ids=location_ids)
+                errors += 1
         if len(location_ids) < batch_size:
             break
         after = location_ids[-1]
-    logger.info("notifications.evaluated", created=created)
+    logger.info("notifications.evaluated", created=created, errors=errors)
 
 
 class Outcome(enum.StrEnum):
