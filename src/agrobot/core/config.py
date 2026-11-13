@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     log_json: bool = False
 
     database_url: str
+    statement_timeout_seconds: float = Field(default=30.0, gt=0)
+    lock_timeout_seconds: float = Field(default=5.0, gt=0)
+    pool_size: int = Field(default=5, gt=0)
+    max_overflow: int = Field(default=10, ge=0)
     api_key: SecretStr | None = Field(default=None, min_length=1)
 
     timezone: ZoneInfo = ZoneInfo("America/Argentina/Buenos_Aires")
@@ -20,12 +24,16 @@ class Settings(BaseSettings):
     ingest_concurrency: int = Field(default=10, gt=0)
     provider_timeout_seconds: float = Field(default=10.0, gt=0)
 
+    ingest_time_limit_seconds: float = Field(default=900.0, gt=0)
+
     evaluate_interval_seconds: float = Field(default=300.0, gt=0)
     evaluate_batch_size: int = Field(default=200, gt=0)
+    evaluate_time_limit_seconds: float = Field(default=300.0, gt=0)
 
     notify_interval_seconds: float = Field(default=30.0, gt=0)
     notify_batch_size: int = Field(default=100, gt=0)
     send_timeout_seconds: float = Field(default=10.0, gt=0)
+    notify_time_limit_seconds: float = Field(default=300.0, gt=0)
 
 
 @lru_cache

@@ -19,9 +19,19 @@ This starts Postgres, applies the migrations, and runs the API plus the `ingest`
   `dev-api-key`; in `/docs`, set it with the *Authorize* button.
 
 The weather provider and the WhatsApp sender are fakes, so nothing calls a third-party service. In
-Compose the workers run every minute or less so alerts show up quickly; set
-`INGEST_INTERVAL_SECONDS`, `EVALUATE_INTERVAL_SECONDS` or `NOTIFY_INTERVAL_SECONDS` to change that.
-If port 8000 or 5432 is taken, set `API_PORT` or `POSTGRES_PORT`.
+Compose the workers run every minute or less so alerts show up quickly, and each worker reports
+healthy while its job keeps succeeding (`docker compose ps`). If port 8000 or 5432 is taken, set
+`API_PORT` or `POSTGRES_PORT`.
+
+To change any other setting, create a `compose.override.yaml` next to `compose.yaml`; Compose
+merges it automatically:
+
+```yaml
+services:
+  ingest:
+    environment:
+      INGEST_INTERVAL_SECONDS: 300
+```
 
 ## Run it without Docker for the app
 
