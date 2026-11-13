@@ -45,11 +45,13 @@ class PeriodicRunner:
         except Exception:
             if scope.expired():
                 logger.warning(
-                    "worker.iteration_timed_out", time_limit_seconds=self._time_limit_seconds
+                    "worker.iteration_timed_out",
+                    job=self._name,
+                    time_limit_seconds=self._time_limit_seconds,
                 )
                 outcome = JobOutcome.TIMED_OUT
             else:
-                logger.exception("worker.iteration_failed")
+                logger.exception("worker.iteration_failed", job=self._name)
                 outcome = JobOutcome.FAILED
         finished_at = datetime.now(UTC)
         run = JobRun(

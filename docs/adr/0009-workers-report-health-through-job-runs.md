@@ -2,7 +2,7 @@
 
 Each worker records every run of its job in the `job_runs` table: one row per job, overwritten by each run, holding when the last run started and finished, its outcome (`succeeded`, `failed` or `timed_out`), its duration, the counters the job returns (for example created, sent or retried) and when the job last succeeded. `python -m agrobot.worker check <job>` reads that row and exits non-zero when the last success is older than 3 × max(interval, run time limit) or the job never succeeded; Compose uses it as each worker's healthcheck, with `start_period` as the start-up grace. The workers coordinate only through the database (ADR-0002), so their health lives there too: any process with database access can see it, and the check needs nothing from the worker process itself. Writing the row is best effort: a failure is logged and never turns a successful run into a failed one. The API's `/health` does not look at workers.
 
-Every run is bounded so a hang shows up as a stale row instead of a worker that is silently stuck: each run has a per-job time limit after which it is cancelled and recorded as `timed_out`, and every database connection sets `statement_timeout` and `lock_timeout`.
+Every run is bounded so a hang shows up as a stale row instead of a worker that is silently stuck: each run has a per-job time limit after which it is cancelled and recorded as `timed_out`, and every connection the API and workers open sets `statement_timeout` and `lock_timeout`. Alembic builds its own engine without them, so a long migration is not cut off.
 
 ## Considered Options
 
