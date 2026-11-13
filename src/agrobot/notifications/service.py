@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agrobot.alerts.models import Alert
 from agrobot.core.errors import NotFoundError
+from agrobot.locations import service as locations
 from agrobot.notifications import repository
 from agrobot.notifications.models import MESSAGE_MAX_NOTIFICATIONS, Notification, retry_delay
 from agrobot.notifications.sender import NotificationSender, PermanentDeliveryError
@@ -31,18 +32,28 @@ async def withdraw_pending(session: AsyncSession, alert: Alert) -> int:
     )
 
 
-async def list_for_alert(session: AsyncSession, alert_id: uuid.UUID) -> Sequence[Notification]:
+async def list_for_alert(
+    session: AsyncSession, alert_id: uuid.UUID, limit: int, before: date | None
+) -> Sequence[Notification]:
     if not await repository.alert_exists(session, alert_id):
         raise NotFoundError("alert not found")
-    return await repository.list_for_alert(session, alert_id)
+    return await repository.list_for_alert(session, alert_id, limit, before)
 
 
 async def evaluate(
-    session_factory: async_sessionmaker[AsyncSession], *, timezone: ZoneInfo
+    session_factory: async_sessionmaker[AsyncSession], *, batch_size: int, timezone: ZoneInfo
 ) -> None:
-    async with session_factory() as session:
-        created = await repository.create_due(session, datetime.now(timezone).date())
-        await session.commit()
+    today = datetime.now(timezone).date()
+    created = 0
+    after: uuid.UUID | None = None
+    while True:
+        async with session_factory() as session:
+            location_ids = await locations.ids_with_fields_after(session, after, batch_size)
+            created += await repository.create_due(session, today, location_ids)
+            await session.commit()
+        if len(location_ids) < batch_size:
+            break
+        after = location_ids[-1]
     logger.info("notifications.evaluated", created=created)
 
 

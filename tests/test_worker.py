@@ -99,7 +99,7 @@ def test_evaluate_job_uses_the_evaluate_interval() -> None:
     assert isinstance(job, partial)
     assert job.func is evaluate
     assert job.args == (session_factory,)
-    assert job.keywords == {"timezone": TIMEZONE}
+    assert job.keywords == {"batch_size": 200, "timezone": TIMEZONE}
 
 
 @pytest.mark.parametrize("value", [0, -1])

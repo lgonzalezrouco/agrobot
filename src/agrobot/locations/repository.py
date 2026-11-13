@@ -1,7 +1,8 @@
+import uuid
 from collections.abc import Sequence
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, true
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,5 +27,21 @@ async def list_with_fields(session: AsyncSession) -> Sequence[Location]:
             select(Location)
             .where(select(Field.id).where(Field.location_id == Location.id).exists())
             .order_by(Location.id)
+        )
+    ).all()
+
+
+async def ids_with_fields_after(
+    session: AsyncSession, after: uuid.UUID | None, limit: int
+) -> Sequence[uuid.UUID]:
+    return (
+        await session.scalars(
+            select(Location.id)
+            .where(
+                select(Field.id).where(Field.location_id == Location.id).exists(),
+                true() if after is None else Location.id > after,
+            )
+            .order_by(Location.id)
+            .limit(limit)
         )
     ).all()

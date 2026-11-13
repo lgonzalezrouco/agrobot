@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     provider_timeout_seconds: float = Field(default=10.0, gt=0)
 
     evaluate_interval_seconds: float = Field(default=300.0, gt=0)
+    evaluate_batch_size: int = Field(default=200, gt=0)
 
     notify_interval_seconds: float = Field(default=30.0, gt=0)
     notify_batch_size: int = Field(default=100, gt=0)
