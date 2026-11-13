@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -8,9 +9,10 @@ import structlog
 from fastapi import status
 from httpx import AsyncClient
 from sqlalchemy import delete, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from agrobot.alerts import service as alerts
 from agrobot.alerts.models import Alert
 from agrobot.fields import service as fields
 from agrobot.fields.models import Field
@@ -21,7 +23,11 @@ from agrobot.notifications import models as notification_models
 from agrobot.notifications import repository
 from agrobot.notifications import service as notifications
 from agrobot.notifications.models import Notification, NotificationStatus
-from agrobot.notifications.sender import FakeNotificationSender, NotificationContent
+from agrobot.notifications.sender import (
+    FakeNotificationSender,
+    NotificationContent,
+    PermanentDeliveryError,
+)
 from agrobot.users.models import User
 from agrobot.weather import WeatherEventType
 from tests.conftest import (
@@ -413,19 +419,69 @@ async def test_database_rejects_snapshot_outside_0_to_100(
 class StubNotificationSender:
     def __init__(self) -> None:
         self.sent: list[tuple[str, NotificationContent]] = []
+        self.messages: list[tuple[str, list[NotificationContent]]] = []
         self.failing: set[str] = set()
         self.hanging: set[str] = set()
         self.started = asyncio.Event()
         self.released = asyncio.Event()
 
-    async def send(self, phone_number: str, content: NotificationContent) -> None:
+    async def send(self, phone_number: str, contents: Sequence[NotificationContent]) -> None:
         self.started.set()
         await asyncio.sleep(0)
-        if content.field_name in self.hanging:
+        field_names = {content.field_name for content in contents}
+        if field_names & self.hanging:
             await self.released.wait()
-        if content.field_name in self.failing:
+        if field_names & self.failing:
             raise RuntimeError("sender unavailable")
-        self.sent.append((phone_number, content))
+        self.messages.append((phone_number, list(contents)))
+        self.sent.extend((phone_number, content) for content in contents)
+
+
+async def _add_alert(
+    session_factory: SessionFactory,
+    alert: Alert,
+    *,
+    field_name: str | None = None,
+    weather_event_type: WeatherEventType = FROST,
+) -> Alert:
+    async with session_factory() as session:
+        field_id = alert.field_id
+        if field_name is not None:
+            field = await session.get_one(Field, alert.field_id)
+            other = Field(
+                user_id=field.user_id,
+                name=field_name,
+                latitude=field.latitude,
+                longitude=field.longitude,
+                location_id=field.location_id,
+            )
+            session.add(other)
+            await session.flush()
+            field_id = other.id
+        added = Alert(field_id=field_id, weather_event_type=weather_event_type, threshold=50)
+        session.add(added)
+        await session.commit()
+        return added
+
+
+async def _add_pending(
+    session_factory: SessionFactory, alert: Alert, *offsets: int, **values: object
+) -> None:
+    async with session_factory() as session:
+        for offset in offsets:
+            session.add(
+                Notification(
+                    alert_id=alert.id, day=_day(offset), probability=70, threshold=50, **values
+                )
+            )
+        await session.commit()
+
+
+async def _phone_number(session_factory: SessionFactory, alert: Alert) -> str:
+    async with session_factory() as session:
+        field = await session.get_one(Field, alert.field_id)
+        user = await session.get_one(User, field.user_id)
+    return user.phone_number
 
 
 async def _pending(
@@ -519,6 +575,54 @@ async def test_pending_notification_is_sent_to_the_users_phone(
     assert before <= notification.sent_at <= datetime.now(UTC)
 
 
+async def test_user_gets_one_message_with_all_pending_notifications_across_alerts_and_fields(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory, day=_day(1))
+    rain = await _add_alert(
+        committed_session_factory, alert, weather_event_type=WeatherEventType.RAIN
+    )
+    north = await _add_alert(committed_session_factory, alert, field_name="Norte")
+    await _add_pending(committed_session_factory, rain, 2)
+    await _add_pending(committed_session_factory, north, 0)
+    other = await _pending(committed_session_factory, day=_day(3), latitude=2)
+    sender = StubNotificationSender()
+
+    await _notify(committed_session_factory, sender)
+
+    assert sorted(sender.messages) == sorted(
+        [
+            (
+                await _phone_number(committed_session_factory, alert),
+                [
+                    NotificationContent("Norte", FROST, _day(0), 70, 50),
+                    NotificationContent("Lote", FROST, _day(1), 70, 50),
+                    NotificationContent("Lote", WeatherEventType.RAIN, _day(2), 70, 50),
+                ],
+            ),
+            (
+                await _phone_number(committed_session_factory, other),
+                [NotificationContent("Lote", FROST, _day(3), 70, 50)],
+            ),
+        ]
+    )
+
+
+async def test_more_than_20_pending_notifications_go_out_in_several_messages_earliest_days_first(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    await _add_pending(committed_session_factory, alert, *reversed(range(25)))
+    sender = StubNotificationSender()
+
+    await _notify(committed_session_factory, sender)
+
+    assert sorted([content.day for content in contents] for _, contents in sender.messages) == [
+        [_day(offset) for offset in range(20)],
+        [_day(offset) for offset in range(20, 25)],
+    ]
+
+
 async def test_backlog_larger_than_a_batch_is_fully_sent_in_one_run_earliest_day_first(
     committed_session_factory: SessionFactory,
 ) -> None:
@@ -553,16 +657,43 @@ async def test_within_a_day_the_longest_waiting_notification_is_claimed_first(
     assert first.sent_at < second.sent_at
 
 
-async def test_notification_is_sent_even_if_its_alert_was_paused_after_it_fired(
-    committed_session_factory: SessionFactory,
+@pytest.mark.parametrize(
+    ("changes", "kept"),
+    [
+        ({"active": False}, {3, 4, 5}),
+        ({"threshold": 70}, {2, 3, 4, 5}),
+        ({"threshold": 40}, {1, 2, 3, 4, 5}),
+        ({"active": True}, {1, 2, 3, 4, 5}),
+    ],
+    ids=["pause", "raise-threshold", "lower-threshold", "resume"],
+)
+async def test_pausing_or_raising_threshold_withdraws_pending_notifications_that_no_longer_apply(
+    committed_session_factory: SessionFactory, changes: dict[str, Any], kept: set[int]
 ) -> None:
-    alert = await _pending(committed_session_factory)
-    await _update_alert(committed_session_factory, alert, active=False)
-    sender = StubNotificationSender()
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    async with committed_session_factory() as session:
+        for offset, probability, status in [
+            (1, 60, NotificationStatus.PENDING),
+            (2, 80, NotificationStatus.PENDING),
+            (3, 60, NotificationStatus.SENT),
+            (4, 60, NotificationStatus.EXPIRED),
+            (5, 60, NotificationStatus.FAILED),
+        ]:
+            session.add(
+                Notification(
+                    alert_id=alert.id,
+                    day=_day(offset),
+                    probability=probability,
+                    threshold=50,
+                    status=status,
+                )
+            )
+        await session.commit()
 
-    await _notify(committed_session_factory, sender)
+    async with committed_session_factory() as session:
+        await alerts.update(session, alert.id, changes.get("threshold"), changes.get("active"))
 
-    assert len(sender.sent) == 1
+    assert set(await _notified(committed_session_factory, alert)) == {_day(o) for o in kept}
 
 
 async def test_failed_send_is_retried_later_without_stopping_the_batch(
@@ -682,18 +813,82 @@ async def test_failing_notifications_back_off_so_due_ones_still_go_out(
     assert [content.day for _, content in sender.sent] == [_day(1)]
 
 
-async def test_concurrent_runs_send_each_notification_once(
+async def test_concurrent_runs_send_each_user_one_message_with_each_notification_once(
     committed_session_factory: SessionFactory,
 ) -> None:
     alerts = [await _pending(committed_session_factory, latitude=n) for n in range(20)]
+    for alert in alerts:
+        await _add_pending(committed_session_factory, alert, 2, 3)
     sender = StubNotificationSender()
 
     await asyncio.gather(
         *(_notify(committed_session_factory, sender, batch_size=3) for _ in range(10))
     )
 
-    assert len(sender.sent) == len(alerts)
-    assert len({phone_number for phone_number, _ in sender.sent}) == len(alerts)
+    assert len(sender.messages) == len(alerts)
+    assert len({phone_number for phone_number, _ in sender.messages}) == len(alerts)
+    assert len(sender.sent) == 3 * len(alerts)
+
+
+async def test_failed_message_backs_off_all_its_notifications_and_rides_along_with_the_next_due(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory, day=_day(1))
+    await _add_pending(committed_session_factory, alert, 2, attempts=2)
+    sender = StubNotificationSender()
+    sender.failing.add("Lote")
+    before = datetime.now(UTC)
+
+    await _notify(committed_session_factory, sender)
+
+    async with committed_session_factory() as session:
+        stored = await repository.list_for_alert(session, alert.id)
+    assert [(n.status, n.attempts) for n in stored] == [
+        (NotificationStatus.PENDING, 1),
+        (NotificationStatus.PENDING, 3),
+    ]
+    assert stored[0].next_attempt_at == stored[1].next_attempt_at
+    assert stored[0].next_attempt_at >= before + timedelta(seconds=120)
+
+    sender.failing.clear()
+    await _add_pending(committed_session_factory, alert, 3)
+    await _notify(committed_session_factory, sender)
+
+    assert [[content.day for content in contents] for _, contents in sender.messages] == [
+        [_day(1), _day(2), _day(3)]
+    ]
+
+
+async def test_database_error_recording_one_message_does_not_stop_the_others(
+    committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broken = await _pending(committed_session_factory, latitude=1)
+    delivered = await _pending(committed_session_factory, latitude=2)
+    async with committed_session_factory() as session:
+        [broken_notification] = await repository.list_for_alert(session, broken.id)
+    lock_pending = repository.lock_pending
+
+    async def lock_pending_failing_for_broken(session: AsyncSession, ids: Any) -> Any:
+        if broken_notification.id in ids:
+            raise OperationalError("UPDATE notifications", {}, ConnectionError("lost"))
+        return await lock_pending(session, ids)
+
+    monkeypatch.setattr(repository, "lock_pending", lock_pending_failing_for_broken)
+
+    with structlog.testing.capture_logs() as logs:
+        await _notify(committed_session_factory, StubNotificationSender())
+
+    assert await _status(committed_session_factory, broken) == NotificationStatus.PENDING
+    assert await _status(committed_session_factory, delivered) == NotificationStatus.SENT
+    assert {
+        "event": "notifications.notified",
+        "expired": 0,
+        "sent": 1,
+        "retried": 0,
+        "failed": 0,
+        "errors": 1,
+        "log_level": "info",
+    } in logs
 
 
 async def test_run_logs_how_many_notifications_were_sent_and_retried(
@@ -713,17 +908,56 @@ async def test_run_logs_how_many_notifications_were_sent_and_retried(
         "expired": 0,
         "sent": 1,
         "retried": 2,
+        "failed": 0,
+        "errors": 0,
         "log_level": "info",
     } in logs
 
 
-async def test_fake_sender_logs_the_content() -> None:
+async def test_fake_sender_logs_the_contents_and_rejects_numbers_ending_in_0000() -> None:
     content = NotificationContent("Lote", FROST, _day(1), 80, 60)
 
     with structlog.testing.capture_logs() as logs:
-        await FakeNotificationSender().send("+5491122334455", content)
+        await FakeNotificationSender().send("+5491122334455", [content])
 
-    assert logs == [{"event": "notifications.fake_sent", "log_level": "info", **content._asdict()}]
+    assert logs == [
+        {
+            "event": "notifications.fake_sent",
+            "log_level": "info",
+            "notifications": [content._asdict()],
+        }
+    ]
+    with pytest.raises(PermanentDeliveryError):
+        await FakeNotificationSender().send("+5491122330000", [content])
+
+
+async def test_permanently_rejected_message_fails_all_its_notifications_for_good(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory, day=_day(1))
+    await _add_pending(committed_session_factory, alert, 2)
+    async with committed_session_factory() as session:
+        field = await session.get_one(Field, alert.field_id)
+        await session.execute(
+            update(User).where(User.id == field.user_id).values(phone_number="+5491122330000")
+        )
+        await session.commit()
+
+    await notifications.notify(
+        committed_session_factory,
+        FakeNotificationSender(),
+        batch_size=BATCH_SIZE,
+        timeout_seconds=TIMEOUT_SECONDS,
+        timezone=TIMEZONE,
+    )
+    await _make_due(committed_session_factory, alert)
+    sender = StubNotificationSender()
+    await _notify(committed_session_factory, sender)
+
+    async with committed_session_factory() as session:
+        stored = await repository.list_for_alert(session, alert.id)
+    assert [(n.status, n.attempts) for n in stored] == [(NotificationStatus.FAILED, 1)] * 2
+    assert sender.sent == []
 
 
 async def test_notification_not_yet_due_is_not_claimed(
@@ -813,6 +1047,8 @@ async def test_past_day_notifications_do_not_take_batch_slots(
         "expired": 3,
         "sent": 1,
         "retried": 0,
+        "failed": 0,
+        "errors": 0,
         "log_level": "info",
     } in logs
 
@@ -867,6 +1103,8 @@ async def test_notification_whose_day_ends_after_it_is_claimed_expires_instead_o
         "expired": 2,
         "sent": 0,
         "retried": 0,
+        "failed": 0,
+        "errors": 0,
         "log_level": "info",
     } in logs
 

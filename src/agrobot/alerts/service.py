@@ -10,6 +10,7 @@ from agrobot.alerts.models import Alert
 from agrobot.core.db import is_foreign_key_violation
 from agrobot.core.errors import ConflictError, NotFoundError
 from agrobot.fields import service as fields
+from agrobot.notifications import service as notifications
 from agrobot.weather import WeatherEventType
 
 logger = structlog.get_logger(__name__)
@@ -62,8 +63,15 @@ async def update(
     if active is not None:
         alert.active = active
     await repository.save(session, alert)
+    dropped = await notifications.delete_pending_not_applying(session, alert)
     await session.commit()
-    logger.info("alerts.updated", alert_id=alert.id, threshold=alert.threshold, active=alert.active)
+    logger.info(
+        "alerts.updated",
+        alert_id=alert.id,
+        threshold=alert.threshold,
+        active=alert.active,
+        dropped_notifications=dropped,
+    )
     return alert
 
 

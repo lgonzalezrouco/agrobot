@@ -6,18 +6,24 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import structlog
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from agrobot.alerts.models import Alert
 from agrobot.core.errors import NotFoundError
 from agrobot.notifications import repository
-from agrobot.notifications.models import Notification, NotificationStatus
-from agrobot.notifications.sender import NotificationSender
+from agrobot.notifications.models import Notification, retry_delay
+from agrobot.notifications.sender import NotificationSender, PermanentDeliveryError
 
 logger = structlog.get_logger(__name__)
 
 
 async def delete_pending_for_field(session: AsyncSession, field_id: uuid.UUID) -> int:
     return await repository.delete_pending_for_field(session, field_id)
+
+
+async def delete_pending_not_applying(session: AsyncSession, alert: Alert) -> int:
+    return await repository.delete_pending_not_applying(session, alert)
 
 
 async def list_for_alert(session: AsyncSession, alert_id: uuid.UUID) -> Sequence[Notification]:
@@ -35,13 +41,6 @@ async def evaluate(
     logger.info("notifications.evaluated", created=created)
 
 
-_MARKS = {
-    "expired": Notification.mark_expired,
-    "sent": Notification.mark_sent,
-    "retried": Notification.mark_send_failed,
-}
-
-
 async def notify(
     session_factory: async_sessionmaker[AsyncSession],
     sender: NotificationSender,
@@ -57,39 +56,63 @@ async def notify(
         outcomes["expired"] = await repository.expire_past(session, datetime.now(timezone).date())
         await session.commit()
 
-    async def deliver(claim: repository.ClaimedNotification, today: date) -> str:
-        outcome = "expired"
-        if claim.notification.day >= today:
+    async def deliver(message: repository.Message, today: date) -> None:
+        ids = [notification.id for notification in message.notifications]
+        contents = [content for content in message.contents if content.day >= today]
+        result = "expired"
+        if contents:
             try:
                 async with asyncio.timeout(timeout_seconds):
-                    await sender.send(claim.phone_number, claim.content)
-                outcome = "sent"
+                    await sender.send(message.phone_number, contents)
+                result = "sent"
+            except PermanentDeliveryError:
+                logger.warning("notifications.send_rejected", notification_ids=ids)
+                result = "failed"
             except Exception:
-                logger.exception("notifications.send_failed", notification_id=claim.notification.id)
-                outcome = "retried"
-        async with session_factory() as session:
-            notification = await session.get(
-                Notification, claim.notification.id, with_for_update=True
-            )
-            if notification is not None and notification.status == NotificationStatus.PENDING:
-                _MARKS[outcome](notification)
+                logger.exception("notifications.send_failed", notification_ids=ids)
+                result = "retried"
+        recorded: Counter[str] = Counter()
+        try:
+            async with session_factory() as session:
+                stored = await repository.lock_pending(session, ids)
+                attempts = max((notification.attempts for notification in stored), default=0)
+                retry_at = datetime.now(UTC) + retry_delay(attempts + 1)
+                for notification in stored:
+                    outcome = "expired" if notification.day < today else result
+                    match outcome:
+                        case "expired":
+                            notification.mark_expired()
+                        case "sent":
+                            notification.mark_sent()
+                        case "failed":
+                            notification.mark_failed()
+                        case _:
+                            notification.mark_send_failed(retry_at)
+                    recorded[outcome] += 1
                 await session.commit()
-        return outcome
+        except SQLAlchemyError:
+            logger.exception("notifications.record_failed", notification_ids=ids)
+            outcomes["errors"] += 1
+            return
+        outcomes.update(recorded)
 
     while True:
         async with session_factory() as session:
-            claimed = await repository.claim_due(session, started_at, batch_size)
+            claimed_users, messages = await repository.claim_due(session, started_at, batch_size)
             leased_until = datetime.now(UTC) + lease
-            for claim in claimed:
-                claim.notification.next_attempt_at = leased_until
+            for message in messages:
+                for notification in message.notifications:
+                    notification.next_attempt_at = max(notification.next_attempt_at, leased_until)
             await session.commit()
         today = datetime.now(timezone).date()
-        outcomes.update(await asyncio.gather(*(deliver(claim, today) for claim in claimed)))
-        if len(claimed) < batch_size:
+        await asyncio.gather(*(deliver(message, today) for message in messages))
+        if claimed_users < batch_size:
             break
     logger.info(
         "notifications.notified",
         expired=outcomes["expired"],
         sent=outcomes["sent"],
         retried=outcomes["retried"],
+        failed=outcomes["failed"],
+        errors=outcomes["errors"],
     )

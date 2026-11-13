@@ -9,6 +9,13 @@ from agrobot.core.db import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 RETRY_BASE_DELAY_SECONDS = 30
 RETRY_MAX_DELAY_SECONDS = 3600
+MESSAGE_MAX_NOTIFICATIONS = 20
+
+
+def retry_delay(attempts: int) -> timedelta:
+    return timedelta(
+        seconds=min(RETRY_BASE_DELAY_SECONDS * 2 ** (attempts - 1), RETRY_MAX_DELAY_SECONDS)
+    )
 
 
 class NotificationStatus(enum.StrEnum):
@@ -56,7 +63,10 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     def mark_expired(self) -> None:
         self.status = NotificationStatus.EXPIRED
 
-    def mark_send_failed(self) -> None:
+    def mark_failed(self) -> None:
         self.attempts += 1
-        delay = min(RETRY_BASE_DELAY_SECONDS * 2 ** (self.attempts - 1), RETRY_MAX_DELAY_SECONDS)
-        self.next_attempt_at = datetime.now(UTC) + timedelta(seconds=delay)
+        self.status = NotificationStatus.FAILED
+
+    def mark_send_failed(self, retry_at: datetime) -> None:
+        self.attempts += 1
+        self.next_attempt_at = retry_at
