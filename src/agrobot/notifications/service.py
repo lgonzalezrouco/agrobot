@@ -153,7 +153,7 @@ async def notify(
             await session.commit()
         today = datetime.now(timezone).date()
         await asyncio.gather(*(deliver_in_order(messages, today) for messages in messages_by_user))
-        if len(user_ids) < batch_size:
+        if len(user_ids) < batch_size or not messages_by_user:
             break
     logger.info(
         "notifications.notified",

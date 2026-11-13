@@ -437,6 +437,7 @@ class StubNotificationSender:
         self.messages: list[tuple[str, list[NotificationContent]]] = []
         self.failing: set[str] = set()
         self.hanging: set[str] = set()
+        self.slow: set[date] = set()
         self.started = asyncio.Event()
         self.released = asyncio.Event()
 
@@ -446,6 +447,8 @@ class StubNotificationSender:
         field_names = {content.field_name for content in contents}
         if field_names & self.hanging:
             await self.released.wait()
+        if contents[0].day in self.slow:
+            await asyncio.sleep(0.1)
         if field_names & self.failing:
             raise RuntimeError("sender unavailable")
         self.messages.append((phone_number, list(contents)))
@@ -629,6 +632,7 @@ async def test_more_than_20_pending_notifications_go_out_in_several_messages_ear
     alert = await _create_alert(committed_session_factory, threshold=50)
     await _add_pending(committed_session_factory, alert, *reversed(range(25)))
     sender = StubNotificationSender()
+    sender.slow.add(_day(0))
 
     await _notify(committed_session_factory, sender)
 
@@ -1024,6 +1028,21 @@ async def test_run_skips_a_notification_locked_by_another_run_without_waiting(
         await asyncio.wait_for(_notify(committed_session_factory, sender), timeout=5)
 
     assert [content.day for _, content in sender.sent] == [_day(1)]
+
+
+async def test_run_ends_when_every_claimed_user_has_their_due_notifications_locked(
+    committed_session_factory: SessionFactory,
+) -> None:
+    locked = await _pending(committed_session_factory, day=_day(0), latitude=1)
+    await _pending(committed_session_factory, day=_day(1), latitude=2)
+
+    async with committed_session_factory() as other_run:
+        await other_run.execute(
+            select(Notification).where(Notification.alert_id == locked.id).with_for_update()
+        )
+        await asyncio.wait_for(
+            _notify(committed_session_factory, StubNotificationSender(), batch_size=1), timeout=5
+        )
 
 
 async def test_pending_notification_for_a_past_day_expires_instead_of_being_sent(
