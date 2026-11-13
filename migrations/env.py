@@ -10,7 +10,6 @@ from agrobot.core.config import get_settings
 from agrobot.models import Base
 
 config = context.config
-# Tests pass an open connection here; they own logging and the event loop.
 handed_connection: Connection | None = config.attributes.get("connection")
 
 if config.config_file_name is not None and handed_connection is None:

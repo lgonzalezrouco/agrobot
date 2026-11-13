@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any, NamedTuple
 
-from sqlalchemy import CursorResult, Select, delete, exists, select, true, update
+from sqlalchemy import CursorResult, Executable, Select, delete, exists, select, true, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,11 @@ from agrobot.forecasts.models import Forecast
 from agrobot.notifications.models import Notification, NotificationStatus
 from agrobot.notifications.sender import NotificationContent
 from agrobot.users.models import User
+
+
+async def _rowcount(session: AsyncSession, statement: Executable) -> int:
+    result: CursorResult[Any] = await session.execute(statement)  # type: ignore[assignment]
+    return result.rowcount
 
 
 async def alert_exists(session: AsyncSession, alert_id: uuid.UUID) -> bool:
@@ -57,39 +62,40 @@ async def create_due(session: AsyncSession, today: date, location_ids: Sequence[
         )
         .with_for_update(read=True, of=(Field, Alert))
     )
-    result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
+    return await _rowcount(
+        session,
         insert(Notification)
         .from_select(["alert_id", "day", "probability", "threshold"], due)
-        .on_conflict_do_nothing(index_elements=[Notification.alert_id, Notification.day])
+        .on_conflict_do_nothing(index_elements=[Notification.alert_id, Notification.day]),
     )
-    return result.rowcount
 
 
 async def delete_pending_for_field(session: AsyncSession, field_id: uuid.UUID) -> int:
-    result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
+    return await _rowcount(
+        session,
         delete(Notification).where(
             Notification.status == NotificationStatus.PENDING,
             Notification.alert_id.in_(select(Alert.id).where(Alert.field_id == field_id)),
-        )
+        ),
     )
-    return result.rowcount
 
 
 async def delete_pending_for_alert(
     session: AsyncSession, alert_id: uuid.UUID, below: int | None
 ) -> int:
-    result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
+    return await _rowcount(
+        session,
         delete(Notification).where(
             Notification.status == NotificationStatus.PENDING,
             Notification.alert_id == alert_id,
             true() if below is None else Notification.probability < below,
-        )
+        ),
     )
-    return result.rowcount
 
 
 async def expire_past(session: AsyncSession, today: date) -> int:
-    result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
+    return await _rowcount(
+        session,
         update(Notification)
         .where(
             Notification.id.in_(
@@ -98,9 +104,8 @@ async def expire_past(session: AsyncSession, today: date) -> int:
                 .with_for_update(skip_locked=True)
             )
         )
-        .values(status=NotificationStatus.EXPIRED)
+        .values(status=NotificationStatus.EXPIRED),
     )
-    return result.rowcount
 
 
 class ClaimedNotification(NamedTuple):

@@ -2,10 +2,10 @@ import enum
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index, UniqueConstraint, func, text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from agrobot.core.db import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from agrobot.core.db import Base, TimestampMixin, UUIDPrimaryKeyMixin, pg_enum
 
 RETRY_BASE_DELAY_SECONDS = 30
 RETRY_MAX_DELAY_SECONDS = 3600
@@ -44,11 +44,7 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     probability: Mapped[int]
     threshold: Mapped[int]
     status: Mapped[NotificationStatus] = mapped_column(
-        Enum(
-            NotificationStatus,
-            name="notification_status",
-            values_callable=lambda members: [member.value for member in members],
-        ),
+        pg_enum(NotificationStatus, "notification_status"),
         server_default=NotificationStatus.PENDING.value,
     )
     attempts: Mapped[int] = mapped_column(server_default="0")

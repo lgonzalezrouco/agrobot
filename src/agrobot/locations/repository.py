@@ -2,12 +2,16 @@ import uuid
 from collections.abc import Sequence
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agrobot.fields.models import Field
 from agrobot.locations.models import Location
+
+
+def _has_fields() -> ColumnElement[bool]:
+    return select(Field.id).where(Field.location_id == Location.id).exists()
 
 
 async def get_or_create(session: AsyncSession, latitude: Decimal, longitude: Decimal) -> Location:
@@ -23,11 +27,7 @@ async def get_or_create(session: AsyncSession, latitude: Decimal, longitude: Dec
 
 async def list_with_fields(session: AsyncSession) -> Sequence[Location]:
     return (
-        await session.scalars(
-            select(Location)
-            .where(select(Field.id).where(Field.location_id == Location.id).exists())
-            .order_by(Location.id)
-        )
+        await session.scalars(select(Location).where(_has_fields()).order_by(Location.id))
     ).all()
 
 
@@ -38,7 +38,7 @@ async def ids_with_fields_after(
         await session.scalars(
             select(Location.id)
             .where(
-                select(Field.id).where(Field.location_id == Location.id).exists(),
+                _has_fields(),
                 Location.id > after,
             )
             .order_by(Location.id)
