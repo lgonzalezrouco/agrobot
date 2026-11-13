@@ -41,5 +41,9 @@ The probability (0–100%) at or above which an alert fires.
 _Avoid_: Limit, trigger level
 
 **Notification**:
-The record created when a forecast for one day reaches an alert's threshold, which is then delivered to the user. An alert produces at most one notification per forecast day. Delivery keeps being retried until that day has passed; a notification still undelivered by then is expired.
-_Avoid_: Alert (for the fired instance), message, event
+The record created when a forecast for one day reaches an alert's threshold, which is then delivered to the user inside a message. An alert produces at most one notification per forecast day. Delivery keeps being retried until that day has passed; a notification still undelivered by then is expired. A notification whose delivery is permanently rejected (for example, the phone number no longer exists) is failed and never retried. Pausing an alert withdraws its undelivered notifications, and raising its threshold withdraws those whose probability is now below it.
+_Avoid_: Alert (for the fired instance), event
+
+**Message**:
+What the user actually receives: one delivery that groups several of that user's notifications still waiting to be delivered. A message succeeds or fails as a whole, for all the notifications it carries.
+_Avoid_: Notification (for the delivery), digest, alert
