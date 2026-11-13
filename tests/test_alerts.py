@@ -301,3 +301,24 @@ async def test_configure_alert_on_a_field_deleted_concurrently_raises_not_found(
             await deleter.execute(delete(User).where(User.id == user.id))
             await deleter.execute(delete(Location).where(Location.id == field.location_id))
             await deleter.commit()
+
+
+async def test_update_alert_deleted_concurrently_raises_not_found(engine: AsyncEngine) -> None:
+    async with AsyncSession(engine, expire_on_commit=False) as setup:
+        user = await users.register(setup, "Ana", "+5491100000003")
+        field = await fields.register(setup, user.id, "Lote 1", 48.01, 48.01)
+        alert = await alerts.configure(setup, field.id, WeatherEventType.FROST, 50, True)
+    async with AsyncSession(engine) as deleter, AsyncSession(engine) as updater:
+        try:
+            await deleter.execute(delete(Alert).where(Alert.id == alert.id))
+            racing = asyncio.create_task(alerts.update(updater, alert.id, 60, None))
+            await wait_until_blocked(engine)
+            await deleter.commit()
+
+            with pytest.raises(NotFoundError):
+                await racing
+        finally:
+            await updater.rollback()
+            await deleter.execute(delete(User).where(User.id == user.id))
+            await deleter.execute(delete(Location).where(Location.id == field.location_id))
+            await deleter.commit()

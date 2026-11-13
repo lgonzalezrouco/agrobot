@@ -66,5 +66,8 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     def mark_send_failed(self, retry_at: datetime) -> None:
         self.attempts += 1
+        self.defer(retry_at)
+
+    def defer(self, retry_at: datetime) -> None:
         self.next_attempt_at = retry_at
         self.leased_until = None

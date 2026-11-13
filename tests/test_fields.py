@@ -226,6 +226,18 @@ async def test_update_field_rejects_null_values(
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
+async def test_register_or_update_field_rejects_nul_in_name(client: AsyncClient) -> None:
+    user_id = await register_user(client)
+    field = await register_field(client, user_id, 1, 1)
+    invalid = {"name": "Lote\u0000", "latitude": 1, "longitude": 1}
+
+    registered = await client.post(f"/users/{user_id}/fields", json=invalid)
+    updated = await client.patch(f"/fields/{field['id']}", json={"name": "Lote\u0000"})
+
+    assert registered.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert updated.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
 async def test_update_field_rejects_unknown_keys(client: AsyncClient) -> None:
     user_id = await register_user(client)
     field = await register_field(client, user_id, 1, 1)

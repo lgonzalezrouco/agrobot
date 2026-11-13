@@ -57,7 +57,9 @@ async def get(session: AsyncSession, alert_id: uuid.UUID) -> Alert:
 async def update(
     session: AsyncSession, alert_id: uuid.UUID, threshold: int | None, active: bool | None
 ) -> Alert:
-    alert = await get(session, alert_id)
+    alert = await repository.get_for_update(session, alert_id)
+    if alert is None:
+        raise NotFoundError("alert not found")
     if threshold is not None:
         alert.threshold = threshold
     if active is not None:

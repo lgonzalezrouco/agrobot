@@ -1,6 +1,8 @@
-from typing import Self
+from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+Name = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\x00]*$")]
 
 
 class PatchModel(BaseModel):
