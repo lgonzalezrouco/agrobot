@@ -42,7 +42,7 @@ async def list_for_alert(
 
 async def evaluate(
     session_factory: async_sessionmaker[AsyncSession], *, batch_size: int, timezone: ZoneInfo
-) -> None:
+) -> dict[str, int]:
     today = datetime.now(timezone).date()
     created = errors = 0
     after = uuid.UUID(int=0)
@@ -58,7 +58,9 @@ async def evaluate(
         if len(location_ids) < batch_size:
             break
         after = location_ids[-1]
-    logger.info("notifications.evaluated", created=created, errors=errors)
+    counters = {"created": created, "errors": errors}
+    logger.info("notifications.evaluated", **counters)
+    return counters
 
 
 class Outcome(enum.StrEnum):
@@ -100,7 +102,7 @@ async def notify(
     batch_size: int,
     timeout_seconds: float,
     timezone: ZoneInfo,
-) -> None:
+) -> dict[str, int]:
     started_at = datetime.now(UTC)
     lease_per_message = timedelta(seconds=2 * timeout_seconds)
     outcomes: Counter[str] = Counter()
@@ -170,11 +172,6 @@ async def notify(
         await asyncio.gather(*(deliver_in_order(messages, today) for messages in messages_by_user))
         if len(user_ids) < batch_size or not messages_by_user:
             break
-    logger.info(
-        "notifications.notified",
-        expired=outcomes[Outcome.EXPIRED],
-        sent=outcomes[Outcome.SENT],
-        retried=outcomes[Outcome.RETRIED],
-        failed=outcomes[Outcome.FAILED],
-        errors=outcomes["errors"],
-    )
+    counters = {str(name): outcomes[name] for name in (*Outcome, "errors")}
+    logger.info("notifications.notified", **counters)
+    return counters

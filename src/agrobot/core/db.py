@@ -1,3 +1,4 @@
+import math
 import uuid
 from datetime import datetime
 from typing import Any, ClassVar
@@ -39,8 +40,23 @@ class TimestampMixin:
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
 
+def _milliseconds(seconds: float) -> str:
+    return str(max(1, math.ceil(seconds * 1000)))
+
+
 def create_engine(settings: Settings) -> AsyncEngine:
-    return create_async_engine(settings.database_url, pool_pre_ping=True)
+    return create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_size=settings.pool_size,
+        max_overflow=settings.max_overflow,
+        connect_args={
+            "server_settings": {
+                "statement_timeout": _milliseconds(settings.statement_timeout_seconds),
+                "lock_timeout": _milliseconds(settings.lock_timeout_seconds),
+            }
+        },
+    )
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

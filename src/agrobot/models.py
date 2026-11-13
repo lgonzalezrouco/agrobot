@@ -7,5 +7,6 @@ from agrobot.forecasts.models import Forecast
 from agrobot.locations.models import Location
 from agrobot.notifications.models import Notification
 from agrobot.users.models import User
+from agrobot.worker.models import JobRun
 
-__all__ = ["Alert", "Base", "Field", "Forecast", "Location", "Notification", "User"]
+__all__ = ["Alert", "Base", "Field", "Forecast", "JobRun", "Location", "Notification", "User"]

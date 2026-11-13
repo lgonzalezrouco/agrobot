@@ -22,7 +22,7 @@ async def ingest(
     concurrency: int,
     timeout_seconds: float,
     timezone: ZoneInfo,
-) -> None:
+) -> dict[str, int]:
     today = datetime.now(timezone).date()
     days = [today + timedelta(days=offset) for offset in range(HORIZON_DAYS)]
     async with session_factory() as session:
@@ -44,4 +44,6 @@ async def ingest(
 
     results = await asyncio.gather(*(ingest_location(location) for location in targets))
     ingested = sum(results)
-    logger.info("forecasts.ingested", ingested=ingested, failed=len(results) - ingested)
+    counters = {"ingested": ingested, "failed": len(results) - ingested}
+    logger.info("forecasts.ingested", **counters)
+    return counters

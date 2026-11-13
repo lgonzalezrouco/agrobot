@@ -1,8 +1,11 @@
 import argparse
 import asyncio
 import signal
+import sys
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from functools import partial
+from typing import NamedTuple
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -13,15 +16,23 @@ from agrobot.forecasts.provider import FakeWeatherProvider
 from agrobot.forecasts.service import ingest
 from agrobot.notifications.sender import FakeNotificationSender
 from agrobot.notifications.service import evaluate, notify
+from agrobot.worker import repository as job_runs
 from agrobot.worker.runner import Job, PeriodicRunner
 
 JobFactory = Callable[[Settings, async_sessionmaker[AsyncSession]], Job]
-Interval = Callable[[Settings], float]
+SettingSeconds = Callable[[Settings], float]
 
-Jobs = Mapping[str, tuple[JobFactory, Interval]]
+
+class JobSpec(NamedTuple):
+    build: JobFactory
+    interval: SettingSeconds
+    time_limit: SettingSeconds
+
+
+Jobs = Mapping[str, JobSpec]
 
 JOBS: Jobs = {
-    "ingest": (
+    "ingest": JobSpec(
         lambda settings, session_factory: partial(
             ingest,
             session_factory,
@@ -31,8 +42,9 @@ JOBS: Jobs = {
             timezone=settings.timezone,
         ),
         lambda settings: settings.ingest_interval_seconds,
+        lambda settings: settings.ingest_time_limit_seconds,
     ),
-    "evaluate": (
+    "evaluate": JobSpec(
         lambda settings, session_factory: partial(
             evaluate,
             session_factory,
@@ -40,8 +52,9 @@ JOBS: Jobs = {
             timezone=settings.timezone,
         ),
         lambda settings: settings.evaluate_interval_seconds,
+        lambda settings: settings.evaluate_time_limit_seconds,
     ),
-    "notify": (
+    "notify": JobSpec(
         lambda settings, session_factory: partial(
             notify,
             session_factory,
@@ -51,24 +64,52 @@ JOBS: Jobs = {
             timezone=settings.timezone,
         ),
         lambda settings: settings.notify_interval_seconds,
+        lambda settings: settings.notify_time_limit_seconds,
     ),
 }
 
 
-def parse_job(argv: Sequence[str] | None = None, jobs: Jobs = JOBS) -> str:
+class Command(NamedTuple):
+    job: str
+    check: bool
+
+
+def parse_command(argv: Sequence[str] | None = None, jobs: Jobs = JOBS) -> Command:
     parser = argparse.ArgumentParser(prog="python -m agrobot.worker")
-    parser.add_argument("job", choices=jobs)
-    job: str = parser.parse_args(argv).job
-    return job
+    commands = parser.add_subparsers(dest="command", required=True)
+    for job in jobs:
+        commands.add_parser(job)
+    commands.add_parser("check").add_argument("job", choices=jobs)
+    args = parser.parse_args(argv)
+    if args.command == "check":
+        return Command(args.job, check=True)
+    return Command(args.command, check=False)
+
+
+async def check(job: str, settings: Settings, jobs: Jobs = JOBS) -> bool:
+    spec = jobs[job]
+    max_age = timedelta(seconds=3 * max(spec.interval(settings), spec.time_limit(settings)))
+    engine = create_engine(settings)
+    try:
+        async with create_session_factory(engine)() as session:
+            last_succeeded_at = await job_runs.last_succeeded_at(session, job)
+    finally:
+        await engine.dispose()
+    return last_succeeded_at is not None and datetime.now(UTC) - last_succeeded_at <= max_age
 
 
 async def main(job: str, settings: Settings, jobs: Jobs = JOBS) -> None:
     configure_logging(settings.log_level, json=settings.log_json)
 
     engine = create_engine(settings)
-    build_job, interval = jobs[job]
+    session_factory = create_session_factory(engine)
+    spec = jobs[job]
     runner = PeriodicRunner(
-        build_job(settings, create_session_factory(engine)), interval_seconds=interval(settings)
+        spec.build(settings, session_factory),
+        name=job,
+        interval_seconds=spec.interval(settings),
+        time_limit_seconds=spec.time_limit(settings),
+        record=partial(job_runs.record, session_factory),
     )
 
     loop = asyncio.get_running_loop()
@@ -86,4 +127,7 @@ async def main(job: str, settings: Settings, jobs: Jobs = JOBS) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main(parse_job(), get_settings()))
+    command = parse_command()
+    if command.check:
+        sys.exit(0 if asyncio.run(check(command.job, get_settings())) else 1)
+    asyncio.run(main(command.job, get_settings()))
