@@ -46,8 +46,6 @@ FIELD_ID=$(curl -s -X POST $API/users/$USER_ID/fields -H "$KEY" -H "$JSON" \
   -d '{"name": "Lote 1", "latitude": -34.6, "longitude": -58.4}' | jq -r .id)
 ALERT_ID=$(curl -s -X POST $API/fields/$FIELD_ID/alerts -H "$KEY" -H "$JSON" \
   -d '{"weather_event_type": "frost", "threshold": 10}' | jq -r .id)
-curl -s -X POST $API/fields/$FIELD_ID/alerts -H "$KEY" -H "$JSON" \
-  -d '{"weather_event_type": "rain", "threshold": 10}'
 ```
 
 Within about two minutes, `ingest` fetches Forecasts for the new Location, `evaluate` creates a
@@ -105,13 +103,14 @@ migrations, and run each test in a transaction that is rolled back at the end.
 ## Known limitations
 
 - Thresholds are probabilities only (0–100). Magnitude thresholds such as °C or mm are not
-  supported.
+  supported ([GLOSSARY](GLOSSARY.md)).
 - A Field on a new Location gets its first Forecast on the next `ingest` run, which can be up to
-  one ingest interval later.
+  one ingest interval later
+  ([ADR-0003](docs/adr/0003-fields-mapped-to-forecast-grid-at-write-time.md)).
 - There are no Prometheus metrics. Monitoring comes only from `job_runs` and the logs
   ([ADR-0009](docs/adr/0009-workers-report-health-through-job-runs.md)).
-- There is no data retention: Forecasts and Notifications are never purged
-  ([ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
+- There is no data retention: Forecasts and Notifications are never purged (for Notifications, see
+  [ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
 - Messages are not persisted, so there is no provider message id for reconciling delivery
   reports ([ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
 - All Users share one timezone
