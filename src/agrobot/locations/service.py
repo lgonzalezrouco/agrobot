@@ -26,6 +26,6 @@ async def list_with_fields(session: AsyncSession) -> Sequence[Location]:
 
 
 async def ids_with_fields_after(
-    session: AsyncSession, after: uuid.UUID | None, limit: int
+    session: AsyncSession, after: uuid.UUID, limit: int
 ) -> Sequence[uuid.UUID]:
     return await repository.ids_with_fields_after(session, after, limit)

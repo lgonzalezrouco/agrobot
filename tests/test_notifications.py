@@ -99,7 +99,9 @@ async def _evaluate(session_factory: SessionFactory, batch_size: int = BATCH_SIZ
     await notifications.evaluate(session_factory, batch_size=batch_size, timezone=TIMEZONE)
 
 
-async def _stored(session: AsyncSession, alert_id: uuid.UUID) -> Sequence[Notification]:
+async def _notifications_by_day(
+    session: AsyncSession, alert_id: uuid.UUID
+) -> Sequence[Notification]:
     return (
         await session.scalars(
             select(Notification).where(Notification.alert_id == alert_id).order_by(Notification.day)
@@ -109,7 +111,7 @@ async def _stored(session: AsyncSession, alert_id: uuid.UUID) -> Sequence[Notifi
 
 async def _notified(session_factory: SessionFactory, alert: Alert) -> dict[date, tuple[int, int]]:
     async with session_factory() as session:
-        stored = await _stored(session, alert.id)
+        stored = await _notifications_by_day(session, alert.id)
     return {n.day: (n.probability, n.threshold) for n in stored}
 
 
@@ -268,7 +270,7 @@ async def test_field_update_waits_only_for_the_batch_holding_its_location(
         evaluating = asyncio.create_task(_evaluate(committed_session_factory, batch_size=1))
         await wait_until_blocked(engine)
 
-        await asyncio.wait_for(_update_field(committed_session_factory, first, name="Moved"), 5)
+        await asyncio.wait_for(_update_field(committed_session_factory, first, latitude=7), 5)
 
         await blocking.commit()
     await asyncio.wait_for(evaluating, timeout=5)
@@ -395,7 +397,7 @@ async def test_evaluate_overlapping_a_move_waits_and_skips_the_old_location(
         ).one()
         field.location = await locations.get_or_create(moving, 5, 1)
         await moving.flush()
-        evaluating = asyncio.create_task(_evaluate(committed_session_factory))
+        evaluating = asyncio.create_task(_evaluate(committed_session_factory, batch_size=1))
         await wait_until_blocked(engine)
         await moving.commit()
     await asyncio.wait_for(evaluating, timeout=5)
@@ -446,7 +448,7 @@ async def test_new_notification_is_pending_and_due_now(
     await _evaluate(committed_session_factory)
 
     async with committed_session_factory() as session:
-        [notification] = await _stored(session, alert.id)
+        [notification] = await _notifications_by_day(session, alert.id)
     assert notification.status == NotificationStatus.PENDING
     assert notification.attempts == 0
     assert notification.sent_at is None
@@ -620,7 +622,7 @@ async def _make_due(session_factory: SessionFactory, alert: Alert, **values: obj
 
 async def _status(session_factory: SessionFactory, alert: Alert) -> NotificationStatus:
     async with session_factory() as session:
-        [notification] = await _stored(session, alert.id)
+        [notification] = await _notifications_by_day(session, alert.id)
     return notification.status
 
 
@@ -636,7 +638,7 @@ async def test_pending_notification_is_sent_to_the_users_phone(
     async with committed_session_factory() as session:
         field = await session.get_one(Field, alert.field_id)
         user = await session.get_one(User, field.user_id)
-        [notification] = await _stored(session, alert.id)
+        [notification] = await _notifications_by_day(session, alert.id)
     assert sender.sent == [(user.phone_number, NotificationContent("Lote", FROST, _day(2), 80, 60))]
     assert notification.status == NotificationStatus.SENT
     assert notification.attempts == 1
@@ -720,7 +722,9 @@ async def test_within_a_day_the_longest_waiting_notification_is_claimed_first(
     await _notify(committed_session_factory, StubNotificationSender(), batch_size=1)
 
     async with committed_session_factory() as session:
-        [[first], [second]] = [await _stored(session, alert.id) for alert in [waiting, recent]]
+        [[first], [second]] = [
+            await _notifications_by_day(session, alert.id) for alert in [waiting, recent]
+        ]
     assert first.sent_at is not None and second.sent_at is not None
     assert first.sent_at < second.sent_at
 
@@ -777,8 +781,8 @@ async def test_failed_send_is_retried_later_without_stopping_the_batch(
     await _notify(committed_session_factory, sender)
 
     async with committed_session_factory() as session:
-        [failed] = await _stored(session, failing.id)
-        [sent] = await _stored(session, delivered.id)
+        [failed] = await _notifications_by_day(session, failing.id)
+        [sent] = await _notifications_by_day(session, delivered.id)
     assert failed.status == NotificationStatus.PENDING
     assert failed.attempts == 1
     assert failed.sent_at is None
@@ -801,8 +805,8 @@ async def test_send_that_never_answers_is_retried_later_without_stopping_the_bat
     )
 
     async with committed_session_factory() as session:
-        [retried] = await _stored(session, hanging.id)
-        [sent] = await _stored(session, delivered.id)
+        [retried] = await _notifications_by_day(session, hanging.id)
+        [sent] = await _notifications_by_day(session, delivered.id)
     assert retried.status == NotificationStatus.PENDING
     assert retried.attempts == 1
     assert retried.next_attempt_at > before + timedelta(seconds=10)
@@ -821,7 +825,7 @@ async def test_retry_delay_doubles_per_attempt_up_to_one_hour(
         before = datetime.now(UTC)
         await _notify(committed_session_factory, sender)
         async with committed_session_factory() as session:
-            [notification] = await _stored(session, alert.id)
+            [notification] = await _notifications_by_day(session, alert.id)
         delays.append(round((notification.next_attempt_at - before).total_seconds()))
         await _make_due(committed_session_factory, alert)
 
@@ -843,7 +847,7 @@ async def test_notification_keeps_retrying_past_many_failures_until_the_sender_r
     await _notify(committed_session_factory, sender)
 
     async with committed_session_factory() as session:
-        [notification] = await _stored(session, alert.id)
+        [notification] = await _notifications_by_day(session, alert.id)
     assert notification.status == NotificationStatus.SENT
     assert notification.attempts == failures + 1
     assert len(sender.sent) == 1
@@ -931,7 +935,7 @@ async def test_failed_message_backs_off_all_its_notifications_and_rides_along_wi
     await _notify(committed_session_factory, sender)
 
     async with committed_session_factory() as session:
-        stored = await _stored(session, alert.id)
+        stored = await _notifications_by_day(session, alert.id)
     assert [(n.status, n.attempts) for n in stored] == [
         (NotificationStatus.PENDING, 1),
         (NotificationStatus.PENDING, 3),
@@ -954,7 +958,7 @@ async def test_database_error_recording_one_message_does_not_stop_the_others(
     broken = await _pending(committed_session_factory, latitude=1)
     delivered = await _pending(committed_session_factory, latitude=2)
     async with committed_session_factory() as session:
-        [broken_notification] = await _stored(session, broken.id)
+        [broken_notification] = await _notifications_by_day(session, broken.id)
     lock_pending = repository.lock_pending
 
     async def lock_pending_failing_for_broken(session: AsyncSession, ids: Any) -> Any:
@@ -1044,7 +1048,7 @@ async def test_permanently_rejected_message_fails_all_its_notifications_for_good
     await _notify(committed_session_factory, sender)
 
     async with committed_session_factory() as session:
-        stored = await _stored(session, alert.id)
+        stored = await _notifications_by_day(session, alert.id)
     assert [(n.status, n.attempts) for n in stored] == [(NotificationStatus.FAILED, 1)] * 2
     assert sender.sent == []
 
@@ -1289,7 +1293,7 @@ async def test_deleting_an_alert_while_its_notification_is_being_sent_does_not_w
     await run
 
     async with committed_session_factory() as session:
-        assert await _stored(session, alert.id) == []
+        assert await _notifications_by_day(session, alert.id) == []
 
 
 async def test_notification_expired_by_another_run_while_being_sent_stays_expired(
@@ -1334,7 +1338,7 @@ async def test_notification_that_fails_is_not_claimed_again_in_the_same_run(
         attempts = [
             notification.attempts
             for alert in broken
-            for notification in await _stored(session, alert.id)
+            for notification in await _notifications_by_day(session, alert.id)
         ]
     assert attempts == [1, 1]
 

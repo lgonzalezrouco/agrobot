@@ -45,7 +45,7 @@ async def evaluate(
 ) -> None:
     today = datetime.now(timezone).date()
     created = 0
-    after: uuid.UUID | None = None
+    after = uuid.UUID(int=0)
     while True:
         async with session_factory() as session:
             location_ids = await locations.ids_with_fields_after(session, after, batch_size)

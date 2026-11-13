@@ -27,7 +27,7 @@ async def list_for_alert(
             select(Notification)
             .where(
                 Notification.alert_id == alert_id,
-                true() if before is None else Notification.day < before,
+                Notification.day < (before or date.max),
             )
             .order_by(Notification.day.desc())
             .limit(limit)
