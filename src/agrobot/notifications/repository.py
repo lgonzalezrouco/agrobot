@@ -1,21 +1,16 @@
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime
-from itertools import batched
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
-from sqlalchemy import CursorResult, delete, exists, select, true, update
+from sqlalchemy import CursorResult, Select, delete, exists, select, true, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agrobot.alerts.models import Alert
 from agrobot.fields.models import Field
 from agrobot.forecasts.models import Forecast
-from agrobot.notifications.models import (
-    MESSAGE_MAX_NOTIFICATIONS,
-    Notification,
-    NotificationStatus,
-)
+from agrobot.notifications.models import Notification, NotificationStatus
 from agrobot.notifications.sender import NotificationContent
 from agrobot.users.models import User
 
@@ -47,7 +42,7 @@ async def create_due(session: AsyncSession, today: date) -> int:
             Forecast.probability >= Alert.threshold,
             ~exists().where(Notification.alert_id == Alert.id, Notification.day == Forecast.day),
         )
-        .with_for_update(read=True, of=Field)
+        .with_for_update(read=True, of=(Field, Alert))
     )
     result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
         insert(Notification)
@@ -67,12 +62,14 @@ async def delete_pending_for_field(session: AsyncSession, field_id: uuid.UUID) -
     return result.rowcount
 
 
-async def delete_pending_not_applying(session: AsyncSession, alert: Alert) -> int:
+async def delete_pending_for_alert(
+    session: AsyncSession, alert_id: uuid.UUID, below: int | None
+) -> int:
     result: CursorResult[tuple[()]] = await session.execute(  # type: ignore[assignment]
         delete(Notification).where(
             Notification.status == NotificationStatus.PENDING,
-            Notification.alert_id == alert.id,
-            Notification.probability < alert.threshold if alert.active else true(),
+            Notification.alert_id == alert_id,
+            true() if below is None else Notification.probability < below,
         )
     )
     return result.rowcount
@@ -93,37 +90,47 @@ async def expire_past(session: AsyncSession, today: date) -> int:
     return result.rowcount
 
 
-class Message(NamedTuple):
+class ClaimedNotification(NamedTuple):
+    notification: Notification
     phone_number: str
-    notifications: list[Notification]
-    contents: list[NotificationContent]
+    content: NotificationContent
 
 
-async def claim_due(
-    session: AsyncSession, due_by: datetime, limit: int
-) -> tuple[int, list[Message]]:
-    first_due = (
-        select(Notification.day, Notification.next_attempt_at)
+def _pending_of_user(*columns: Any) -> Select[Any]:
+    return (
+        select(*columns)
         .join(Alert, Alert.id == Notification.alert_id)
         .join(Field, Field.id == Alert.field_id)
-        .where(
-            Field.user_id == User.id,
-            Notification.status == NotificationStatus.PENDING,
-            Notification.next_attempt_at <= due_by,
-        )
+        .where(Field.user_id == User.id, Notification.status == NotificationStatus.PENDING)
+    )
+
+
+async def claim_users(
+    session: AsyncSession, due_by: datetime, now: datetime, limit: int
+) -> Sequence[uuid.UUID]:
+    first_due = (
+        _pending_of_user(Notification.day, Notification.next_attempt_at)
+        .where(Notification.next_attempt_at <= due_by)
         .order_by(Notification.day, Notification.next_attempt_at)
         .limit(1)
         .lateral()
     )
-    user_ids = (
+    in_flight = _pending_of_user(Notification.id).where(Notification.leased_until > now).exists()
+    return (
         await session.scalars(
             select(User.id)
             .join(first_due, true())
+            .where(~in_flight)
             .order_by(first_due.c.day, first_due.c.next_attempt_at)
             .limit(limit)
             .with_for_update(of=User, skip_locked=True)
         )
     ).all()
+
+
+async def pending_for_users(
+    session: AsyncSession, user_ids: Sequence[uuid.UUID]
+) -> list[ClaimedNotification]:
     rows = await session.execute(
         select(Notification, User.phone_number, Field.name, Alert.weather_event_type)
         .join(Alert, Alert.id == Notification.alert_id)
@@ -133,25 +140,19 @@ async def claim_due(
         .order_by(Notification.day, Notification.next_attempt_at)
         .with_for_update(of=Notification, skip_locked=True)
     )
-    by_phone: dict[str, list[tuple[Notification, NotificationContent]]] = {}
-    for notification, phone_number, field_name, weather_event_type in rows:
-        by_phone.setdefault(phone_number, []).append(
-            (
-                notification,
-                NotificationContent(
-                    field_name,
-                    weather_event_type,
-                    notification.day,
-                    notification.probability,
-                    notification.threshold,
-                ),
-            )
+    return [
+        ClaimedNotification(
+            notification,
+            phone_number,
+            NotificationContent(
+                field_name,
+                weather_event_type,
+                notification.day,
+                notification.probability,
+                notification.threshold,
+            ),
         )
-    return len(user_ids), [
-        Message(phone_number, [n for n, _ in chunk], [c for _, c in chunk])
-        for phone_number, claims in by_phone.items()
-        if any(n.next_attempt_at <= due_by for n, _ in claims)
-        for chunk in batched(claims, MESSAGE_MAX_NOTIFICATIONS, strict=False)
+        for notification, phone_number, field_name, weather_event_type in rows
     ]
 
 

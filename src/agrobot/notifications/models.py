@@ -54,6 +54,7 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     attempts: Mapped[int] = mapped_column(server_default="0")
     next_attempt_at: Mapped[datetime] = mapped_column(server_default=func.now())
     sent_at: Mapped[datetime | None]
+    leased_until: Mapped[datetime | None]
 
     def mark_sent(self) -> None:
         self.attempts += 1
@@ -70,3 +71,4 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     def mark_send_failed(self, retry_at: datetime) -> None:
         self.attempts += 1
         self.next_attempt_at = retry_at
+        self.leased_until = None

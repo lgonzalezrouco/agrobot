@@ -370,6 +370,21 @@ async def test_move_overlapping_evaluate_waits_and_deletes_what_it_created(
     assert await _notified(committed_session_factory, alert) == {}
 
 
+async def test_evaluate_overlapping_a_pause_waits_and_creates_nothing(
+    committed_session_factory: SessionFactory, engine: AsyncEngine
+) -> None:
+    alert = await _create_alert(committed_session_factory, threshold=50)
+    await _forecast(committed_session_factory, 60)
+    async with committed_session_factory() as pausing:
+        await pausing.execute(update(Alert).where(Alert.id == alert.id).values(active=False))
+        evaluating = asyncio.create_task(_evaluate(committed_session_factory))
+        await wait_until_blocked(engine)
+        await pausing.commit()
+    await asyncio.wait_for(evaluating, timeout=5)
+
+    assert await _notified(committed_session_factory, alert) == {}
+
+
 async def test_new_notification_is_pending_and_due_now(
     committed_session_factory: SessionFactory,
 ) -> None:
@@ -617,7 +632,7 @@ async def test_more_than_20_pending_notifications_go_out_in_several_messages_ear
 
     await _notify(committed_session_factory, sender)
 
-    assert sorted([content.day for content in contents] for _, contents in sender.messages) == [
+    assert [[content.day for content in contents] for _, contents in sender.messages] == [
         [_day(offset) for offset in range(20)],
         [_day(offset) for offset in range(20, 25)],
     ]
@@ -828,6 +843,27 @@ async def test_concurrent_runs_send_each_user_one_message_with_each_notification
     assert len(sender.messages) == len(alerts)
     assert len({phone_number for phone_number, _ in sender.messages}) == len(alerts)
     assert len(sender.sent) == 3 * len(alerts)
+
+
+async def test_user_with_a_message_in_flight_is_skipped_even_with_a_new_due_notification(
+    committed_session_factory: SessionFactory,
+) -> None:
+    alert = await _pending(committed_session_factory, day=_day(1))
+    in_flight_sender = StubNotificationSender()
+    await _hang(committed_session_factory, in_flight_sender, alert)
+    in_flight = asyncio.create_task(_notify(committed_session_factory, in_flight_sender))
+    await in_flight_sender.started.wait()
+    await _add_pending(committed_session_factory, alert, 2)
+    sender = StubNotificationSender()
+
+    await asyncio.wait_for(_notify(committed_session_factory, sender, batch_size=1), timeout=5)
+    in_flight_sender.released.set()
+    await in_flight
+
+    assert sender.sent == []
+    assert [content.day for _, content in in_flight_sender.sent] == [_day(1)]
+    await _notify(committed_session_factory, sender)
+    assert [content.day for _, content in sender.sent] == [_day(2)]
 
 
 async def test_failed_message_backs_off_all_its_notifications_and_rides_along_with_the_next_due(
@@ -1080,14 +1116,14 @@ async def test_notification_whose_day_ends_after_it_is_claimed_expires_instead_o
     ]
     instant = datetime.now(UTC)
     freeze_clock(monkeypatch, notifications, instant)
-    claim_due = repository.claim_due
+    pending_for_users = repository.pending_for_users
 
-    async def claim_due_until_midnight(*args: Any) -> Any:
-        claimed = await claim_due(*args)
+    async def pending_for_users_until_midnight(*args: Any) -> Any:
+        claimed = await pending_for_users(*args)
         freeze_clock(monkeypatch, notifications, instant + timedelta(days=1))
         return claimed
 
-    monkeypatch.setattr(repository, "claim_due", claim_due_until_midnight)
+    monkeypatch.setattr(repository, "pending_for_users", pending_for_users_until_midnight)
     sender = StubNotificationSender()
 
     with structlog.testing.capture_logs() as logs:

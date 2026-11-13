@@ -63,7 +63,7 @@ async def update(
     if active is not None:
         alert.active = active
     await repository.save(session, alert)
-    dropped = await notifications.delete_pending_not_applying(session, alert)
+    dropped = await notifications.withdraw_pending(session, alert)
     await session.commit()
     logger.info(
         "alerts.updated",
