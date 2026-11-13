@@ -255,7 +255,7 @@ def test_evaluate_interval_must_be_positive(value: float) -> None:
 
 
 def test_evaluate_interval_defaults_to_5_minutes() -> None:
-    assert SETTINGS.evaluate_interval_seconds == 300
+    assert Settings.model_fields["evaluate_interval_seconds"].default == 300
 
 
 def test_notify_job_uses_the_fake_sender_and_notify_settings() -> None:
@@ -285,8 +285,8 @@ def test_notify_settings_must_be_positive(setting: str, value: int) -> None:
 
 
 def test_notify_settings_default_to_30_seconds_and_100_per_batch() -> None:
-    assert SETTINGS.notify_interval_seconds == 30
-    assert SETTINGS.notify_batch_size == 100
+    assert Settings.model_fields["notify_interval_seconds"].default == 30
+    assert Settings.model_fields["notify_batch_size"].default == 100
 
 
 @pytest.mark.parametrize("setting", ["provider_timeout_seconds", "send_timeout_seconds"])
