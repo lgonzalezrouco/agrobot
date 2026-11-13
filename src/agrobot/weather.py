@@ -2,6 +2,8 @@ import enum
 
 from sqlalchemy import Enum
 
+from agrobot.core.db import pg_enum
+
 
 class WeatherEventType(enum.StrEnum):
     FROST = "frost"
@@ -12,8 +14,4 @@ class WeatherEventType(enum.StrEnum):
 
 
 def weather_event_type_column_type() -> Enum:
-    return Enum(
-        WeatherEventType,
-        name="weather_event_type",
-        values_callable=lambda members: [member.value for member in members],
-    )
+    return pg_enum(WeatherEventType, "weather_event_type")

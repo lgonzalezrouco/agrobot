@@ -86,7 +86,6 @@ async def engine(settings: Settings, alembic_config: Config) -> AsyncIterator[As
 
 @pytest.fixture
 async def db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
-    # create_savepoint turns commit() in code under test into a savepoint release.
     async with engine.connect() as connection:
         transaction = await connection.begin()
         session_factory = async_sessionmaker(

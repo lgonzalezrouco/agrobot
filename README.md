@@ -5,26 +5,21 @@ Weather alert system: a REST API and background workers on PostgreSQL. The origi
 
 ## Run it
 
-Requires Docker.
+Requires Docker. No `.env` is needed.
 
 ```bash
 docker compose up --build
 ```
 
 This starts Postgres, applies the migrations, and runs the API plus the `ingest`, `evaluate` and
-`notify` workers, each in its own container. No `.env` is needed.
+`notify` workers, each in its own container. The weather provider and the WhatsApp sender are fakes,
+and the workers run every minute or less so alerts show up quickly.
 
-- API docs: http://localhost:8000/docs
-- Every endpoint except `/health` requires the `X-API-Key` header. The default key is
-  `dev-api-key`; in `/docs`, set it with the *Authorize* button.
-
-The weather provider and the WhatsApp sender are fakes, so nothing calls a third-party service. In
-Compose the workers run every minute or less so alerts show up quickly, and each worker reports
-healthy while its job keeps succeeding (`docker compose ps`). If port 8000 or 5432 is taken, set
-`API_PORT` or `POSTGRES_PORT`.
-
-To change any other setting, create a `compose.override.yaml` next to `compose.yaml`; Compose
-merges it automatically:
+- API docs: <http://localhost:8000/docs>. Every endpoint except `/health` requires the header
+  `X-API-Key: dev-api-key` (in `/docs`, use _Authorize_).
+- If port 8000 or 5432 is taken, set `API_PORT` or `POSTGRES_PORT`.
+- To change any other setting, add a `compose.override.yaml`
+  ([ADR-0010](docs/adr/0010-compose-settings-are-fixed-values.md)):
 
 ```yaml
 services:
@@ -35,7 +30,7 @@ services:
 
 ## Try it
 
-With the stack from `docker compose up --build` running, in another terminal (needs `jq`):
+With the stack running, in another terminal (needs `jq`):
 
 ```bash
 API=localhost:${API_PORT:-8000}; KEY='X-API-Key: dev-api-key'; JSON='Content-Type: application/json'
@@ -48,26 +43,26 @@ ALERT_ID=$(curl -s -X POST $API/fields/$FIELD_ID/alerts -H "$KEY" -H "$JSON" \
   -d '{"weather_event_type": "frost", "threshold": 10}' | jq -r .id)
 ```
 
-Within about two minutes, `ingest` fetches Forecasts for the new Location, `evaluate` creates a
-Notification for every day that reaches the Threshold, and `notify` delivers them to Ana as one
+Within about two minutes `ingest` fetches Forecasts for the new Location, `evaluate` creates a
+Notification for every day that reaches the Threshold, and `notify` sends them to Ana as one
 grouped Message:
 
 ```bash
 docker compose logs -f notify | grep fake_sent
 ```
 
-Then read the Alert's Notification history, newest day first. To get the next page, pass
-`before=<the last day received>`:
+Read the Alert's Notification history, newest day first (for the next page, pass
+`before=<the last day received>`):
 
 ```bash
 curl -s "$API/alerts/$ALERT_ID/notifications?limit=3" -H "$KEY" | jq
 ```
 
-The fake WhatsApp sender rejects every phone number ending in `0000`. Repeat the steps with
-`"phone_number": "+5491100000000"`, and that User's Notifications end up `failed` after one attempt.
-`notify` logs `notifications.send_rejected`.
+The fake sender rejects phone numbers ending in `0000`: repeat the steps with
+`"phone_number": "+5491100000000"` and that User's Notifications end up `failed` after one attempt,
+with `notifications.send_rejected` in the `notify` logs.
 
-Check the workers' health and their last runs:
+Check the workers' health and last runs:
 
 ```bash
 docker compose ps                                  # each worker shows (healthy)
@@ -88,40 +83,42 @@ uv run uvicorn --factory agrobot.api.app:create_app    # API at http://localhost
 uv run python -m agrobot.worker ingest                 # each worker in its own terminal
 uv run python -m agrobot.worker evaluate
 uv run python -m agrobot.worker notify
+curl localhost:8000/health                             # {"status":"ok","database":"ok"}
 ```
 
 ## Test it
 
 ```bash
-uv run pytest
-curl localhost:8000/health   # {"status":"ok","database":"ok"}
+uv run pytest   # needs Docker; starts its own Postgres (ADR-0001)
 ```
-
-The tests start their own Postgres with testcontainers (they only need Docker), apply the real
-migrations, and run each test in a transaction that is rolled back at the end.
 
 ## Known limitations
 
-- Thresholds are probabilities only (0–100). Magnitude thresholds such as °C or mm are not
-  supported ([GLOSSARY](GLOSSARY.md)).
-- A Field on a new Location gets its first Forecast on the next `ingest` run, which can be up to
-  one ingest interval later
+- Thresholds are probabilities only (0–100), not magnitudes such as °C or mm
+  ([GLOSSARY](GLOSSARY.md)).
+- A Field on a new Location gets its first Forecast on the next `ingest` run, up to one ingest
+  interval later
   ([ADR-0003](docs/adr/0003-fields-mapped-to-forecast-grid-at-write-time.md)).
-- There are no Prometheus metrics. Monitoring comes only from `job_runs` and the logs
+- No Prometheus metrics. Monitoring is `job_runs` and the logs
   ([ADR-0009](docs/adr/0009-workers-report-health-through-job-runs.md)).
-- There is no data retention: Forecasts and Notifications are never purged (for Notifications, see
-  [ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
-- Messages are not persisted, so there is no provider message id for reconciling delivery
-  reports ([ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
+- No data retention: Forecasts and Notifications are never purged.
+- Messages are not persisted, so there is no provider message id to reconcile delivery reports
+  ([ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
 - All Users share one timezone
   ([ADR-0007](docs/adr/0007-forecast-days-use-one-configured-timezone.md)).
-- Scale: on a laptop with 1M Alerts across 50k Locations, the first `evaluate` run takes about 27 s,
-  and a run with nothing new to create takes about 7.5 s (2.5× slower than before batching). A Field
-  update waits at most 0.06 s for a run in progress
-  ([benchmark](https://github.com/lgonzalezrouco/agrobot/pull/54#issuecomment-6855313041),
-  [ADR-0006](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)).
 
 ## Decisions
 
-Design decisions are recorded as ADRs in [`docs/adr/`](docs/adr/). The domain vocabulary is in
+- [Tests run on real Postgres, not SQLite](docs/adr/0001-real-postgres-in-tests.md)
+- [API and each job are separate processes](docs/adr/0002-api-and-worker-as-separate-processes.md)
+- [Fields snap to a 0.1° Location grid on write](docs/adr/0003-fields-mapped-to-forecast-grid-at-write-time.md)
+- [One Alert per Field and event type](docs/adr/0004-one-alert-per-field-and-weather-event-type.md)
+- [A Field is a point, not a boundary](docs/adr/0005-field-is-a-point-not-a-boundary.md)
+- [Notifications are the outbox, one per Alert and day](docs/adr/0006-notifications-are-an-outbox-deduplicated-per-alert-and-day.md)
+- [One configured timezone for forecast days](docs/adr/0007-forecast-days-use-one-configured-timezone.md)
+- [Internal API behind one shared key](docs/adr/0008-the-api-is-internal-called-only-by-the-whatsapp-bot.md)
+- [Worker health lives in `job_runs`](docs/adr/0009-workers-report-health-through-job-runs.md)
+- [Compose settings are fixed values](docs/adr/0010-compose-settings-are-fixed-values.md)
+
+Details and rejected options are in [`docs/adr/`](docs/adr/). The domain vocabulary is in
 [`GLOSSARY.md`](GLOSSARY.md).

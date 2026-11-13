@@ -1,9 +1,10 @@
+import enum
 import math
 import uuid
 from datetime import datetime
 from typing import Any, ClassVar
 
-from sqlalchemy import DateTime, MetaData, func
+from sqlalchemy import DateTime, Enum, MetaData, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -38,6 +39,12 @@ class UUIDPrimaryKeyMixin:
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+
+def pg_enum(enum_type: type[enum.Enum], name: str) -> Enum:
+    return Enum(
+        enum_type, name=name, values_callable=lambda members: [member.value for member in members]
+    )
 
 
 def _milliseconds(seconds: float) -> str:

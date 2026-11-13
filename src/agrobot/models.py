@@ -1,5 +1,3 @@
-"""Import every feature's models here so Alembic autogenerate sees them."""
-
 from agrobot.alerts.models import Alert
 from agrobot.core.db import Base
 from agrobot.fields.models import Field

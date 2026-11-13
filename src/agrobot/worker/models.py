@@ -1,11 +1,10 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Enum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from agrobot.core.db import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from agrobot.core.db import Base, TimestampMixin, UUIDPrimaryKeyMixin, pg_enum
 
 
 class JobOutcome(enum.StrEnum):
@@ -20,13 +19,7 @@ class JobRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     job: Mapped[str] = mapped_column(unique=True)
     started_at: Mapped[datetime]
     finished_at: Mapped[datetime]
-    outcome: Mapped[JobOutcome] = mapped_column(
-        Enum(
-            JobOutcome,
-            name="job_outcome",
-            values_callable=lambda members: [member.value for member in members],
-        )
-    )
+    outcome: Mapped[JobOutcome] = mapped_column(pg_enum(JobOutcome, "job_outcome"))
     duration_seconds: Mapped[float]
     counters: Mapped[dict[str, int]] = mapped_column(JSONB)
     last_succeeded_at: Mapped[datetime | None]
