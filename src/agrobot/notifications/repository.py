@@ -19,15 +19,23 @@ async def alert_exists(session: AsyncSession, alert_id: uuid.UUID) -> bool:
     return await session.get(Alert, alert_id) is not None
 
 
-async def list_for_alert(session: AsyncSession, alert_id: uuid.UUID) -> Sequence[Notification]:
+async def list_for_alert(
+    session: AsyncSession, alert_id: uuid.UUID, limit: int, before: date | None
+) -> Sequence[Notification]:
     return (
         await session.scalars(
-            select(Notification).where(Notification.alert_id == alert_id).order_by(Notification.day)
+            select(Notification)
+            .where(
+                Notification.alert_id == alert_id,
+                Notification.day < (before or date.max),
+            )
+            .order_by(Notification.day.desc())
+            .limit(limit)
         )
     ).all()
 
 
-async def create_due(session: AsyncSession, today: date) -> int:
+async def create_due(session: AsyncSession, today: date, location_ids: Sequence[uuid.UUID]) -> int:
     due = (
         select(Alert.id, Forecast.day, Forecast.probability, Alert.threshold)
         .join(Field, Field.id == Alert.field_id)
@@ -37,10 +45,15 @@ async def create_due(session: AsyncSession, today: date) -> int:
             & (Forecast.weather_event_type == Alert.weather_event_type),
         )
         .where(
+            Field.location_id.in_(location_ids),
             Alert.active,
             Forecast.day >= today,
             Forecast.probability >= Alert.threshold,
-            ~exists().where(Notification.alert_id == Alert.id, Notification.day == Forecast.day),
+            ~exists().where(
+                Notification.alert_id == Alert.id,
+                Notification.day >= today,
+                Notification.day == Forecast.day,
+            ),
         )
         .with_for_update(read=True, of=(Field, Alert))
     )

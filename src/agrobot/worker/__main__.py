@@ -34,7 +34,10 @@ JOBS: Jobs = {
     ),
     "evaluate": (
         lambda settings, session_factory: partial(
-            evaluate, session_factory, timezone=settings.timezone
+            evaluate,
+            session_factory,
+            batch_size=settings.evaluate_batch_size,
+            timezone=settings.timezone,
         ),
         lambda settings: settings.evaluate_interval_seconds,
     ),

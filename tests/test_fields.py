@@ -6,7 +6,8 @@ from decimal import Decimal
 import pytest
 from fastapi import status
 from httpx import AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from agrobot.api.app import create_app
@@ -26,6 +27,8 @@ from tests.conftest import (
     register_user,
     wait_until_blocked,
 )
+
+OUT_OF_RANGE = [(90.1, 0), (-90.1, 0), (0, 180.1), (0, -180.1)]
 
 
 async def test_register_field_returns_field_with_its_location(client: AsyncClient) -> None:
@@ -72,10 +75,7 @@ async def test_register_field_rounds_to_nearest_grid_point(
     assert field["location"]["longitude"] == grid_longitude
 
 
-@pytest.mark.parametrize(
-    ("latitude", "longitude"),
-    [(90.1, 0), (-90.1, 0), (0, 180.1), (0, -180.1)],
-)
+@pytest.mark.parametrize(("latitude", "longitude"), OUT_OF_RANGE)
 async def test_register_field_rejects_out_of_range_coordinates(
     client: AsyncClient, latitude: float, longitude: float
 ) -> None:
@@ -87,6 +87,30 @@ async def test_register_field_rejects_out_of_range_coordinates(
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+@pytest.mark.parametrize(("latitude", "longitude"), OUT_OF_RANGE)
+async def test_database_rejects_out_of_range_field_coordinates(
+    committed_session_factory: async_sessionmaker[AsyncSession], latitude: float, longitude: float
+) -> None:
+    field = await create_field(committed_session_factory)
+    async with committed_session_factory() as session:
+        statement = (
+            update(Field).where(Field.id == field.id).values(latitude=latitude, longitude=longitude)
+        )
+
+        with pytest.raises(IntegrityError):
+            await session.execute(statement)
+
+
+@pytest.mark.parametrize(("latitude", "longitude"), OUT_OF_RANGE)
+async def test_database_rejects_out_of_range_location_coordinates(
+    db_session: AsyncSession, latitude: float, longitude: float
+) -> None:
+    db_session.add(Location(latitude=Decimal(str(latitude)), longitude=Decimal(str(longitude))))
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
 
 
 async def test_register_field_for_unknown_user_returns_404(client: AsyncClient) -> None:

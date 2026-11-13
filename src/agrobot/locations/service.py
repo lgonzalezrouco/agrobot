@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -22,3 +23,9 @@ async def get_or_create(session: AsyncSession, latitude: float, longitude: float
 
 async def list_with_fields(session: AsyncSession) -> Sequence[Location]:
     return await repository.list_with_fields(session)
+
+
+async def ids_with_fields_after(
+    session: AsyncSession, after: uuid.UUID, limit: int
+) -> Sequence[uuid.UUID]:
+    return await repository.ids_with_fields_after(session, after, limit)
