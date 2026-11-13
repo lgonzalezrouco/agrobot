@@ -27,6 +27,7 @@ from agrobot.notifications.sender import (
     FakeNotificationSender,
     NotificationContent,
     PermanentDeliveryError,
+    render_message,
 )
 from agrobot.users.models import User
 from agrobot.weather import WeatherEventType
@@ -1112,11 +1113,25 @@ async def test_fake_sender_logs_the_contents_and_rejects_numbers_ending_in_0000(
         {
             "event": "notifications.fake_sent",
             "log_level": "info",
+            "text": render_message([content]),
             "notifications": [content._asdict()],
         }
     ]
     with pytest.raises(PermanentDeliveryError):
         await FakeNotificationSender().send("+5491122330000", [content])
+
+
+def test_message_text_lists_each_notification_on_its_own_line() -> None:
+    contents = [
+        NotificationContent("Lote", FROST, date(2026, 11, 14), 80, 60),
+        NotificationContent("Norte", WeatherEventType.HEAT_WAVE, date(2026, 11, 15), 55, 50),
+    ]
+
+    assert render_message(contents) == (
+        "Weather alert\n"
+        "- Lote: frost on Sat 2026-11-14, 80% chance (your threshold: 60%)\n"
+        "- Norte: heat wave on Sun 2026-11-15, 55% chance (your threshold: 50%)"
+    )
 
 
 async def test_permanently_rejected_message_fails_all_its_notifications_for_good(

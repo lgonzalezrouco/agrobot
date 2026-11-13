@@ -5,6 +5,12 @@ Weather alert system: a REST API and background workers on PostgreSQL. The origi
 
 ## How it works
 
+A User adds Fields and creates Alerts for them. Agrobot gets weather Forecasts for each Field. When
+a Forecast reaches the Threshold of an Alert, Agrobot tells the User in a WhatsApp Message.
+
+Three workers and the API do the work. Each one is a separate process. They share only the
+Postgres database.
+
 ```text
 ingest    Weather Provider → Forecasts for every Location with Fields, 7 days ahead
 evaluate  Alerts × Forecasts → one Notification per Alert and day that reaches the Threshold
@@ -12,9 +18,28 @@ notify    pending Notifications → Messages grouping each User's Notifications 
 API       Users, Fields, Alerts and each Alert's Notification history
 ```
 
-Each job runs in its own worker process, and they share only Postgres. Leases, retries with
-backoff, expiry and the `job_runs` healthcheck let delivery survive crashes, sender outages and
-several `notify` replicas.
+1. `ingest` gets Forecasts from the Weather Provider for the next 7 days. It does this only for
+   Locations that have Fields. Near Fields share one Location, so they share one request.
+2. `evaluate` compares each Forecast with the Threshold of each Alert at that Location. It creates
+   one Notification for each Alert and day when the probability is at or above the Threshold.
+3. `notify` puts the pending Notifications of each User into Messages, with a maximum of 20
+   Notifications in each Message. Then it sends the Messages.
+
+### When delivery fails
+
+- **The sender has a temporary problem:** the Notifications stay `pending`. `notify` tries again
+  later. The wait time doubles after each failed attempt, up to a maximum.
+- **The sender rejects the Message permanently:** for example, the phone number does not exist.
+  The Notifications become `failed`, and `notify` does not try again.
+- **The day passes before delivery:** the Notifications become `expired`. A Forecast for a past
+  day is not useful.
+- **A `notify` worker stops during a delivery:** before it sends, `notify` reserves the
+  Notifications for a limited time (a lease). When the lease ends, a different run can send them.
+  Thus you can run more than one `notify` worker, and two workers never send the same Message at
+  the same time.
+
+Each worker records each run in the `job_runs` table. The healthcheck marks a worker unhealthy if
+it has no recent successful run.
 
 ## Run it
 
@@ -43,7 +68,12 @@ services:
 
 ## Try it
 
-With the stack running, in another terminal (needs `jq`):
+These steps create one User with one Field and one Alert. Then they show the Message that the
+User receives. The stack must be running, and you need `jq`.
+
+### 1. Create a User, a Field and an Alert
+
+In a different terminal, run:
 
 ```bash
 API=localhost:${API_PORT:-8000}; KEY='X-API-Key: dev-api-key'; JSON='Content-Type: application/json'
@@ -56,26 +86,81 @@ ALERT_ID=$(curl -s -X POST $API/fields/$FIELD_ID/alerts -H "$KEY" -H "$JSON" \
   -d '{"weather_event_type": "frost", "threshold": 10}' | jq -r .id)
 ```
 
-Within about two minutes `ingest` fetches Forecasts for the new Location, `evaluate` creates a
-Notification for every day that reaches the Threshold, and `notify` sends them to Ana as one
-grouped Message:
+This Alert tells Ana about each day when the probability of frost at "Lote 1" is 10% or more.
+
+If you run the steps again, `POST /users` returns `409` because the phone number is already
+registered. Then `USER_ID` is `null` and all the subsequent requests fail. To use the User that
+exists, get its ID from the phone number:
+
+```bash
+USER_ID=$(curl -s -G $API/users -H "$KEY" --data-urlencode 'phone_number=+5491112345678' | jq -r .id)
+```
+
+### 2. Wait for the workers
+
+Three workers do these steps, one after the other. In Docker Compose, each worker runs at least
+once every 60 seconds, so the full sequence takes approximately two minutes.
+
+1. `ingest` gets the Forecasts for the Location of "Lote 1" for the next 7 days. The fake Weather
+   Provider calculates each probability from the Location, the day and the Weather Event Type.
+   Thus the same Location always gets the same Forecast for a given day.
+2. `evaluate` compares each frost Forecast with the Threshold of the Alert. It creates one
+   Notification for each day when the probability is at or above the Threshold.
+3. `notify` puts the pending Notifications of Ana into one Message, with a maximum of 20. The fake
+   sender does not send the Message. It writes the Message to the `notify` log.
+
+### 3. Read the Message
 
 ```bash
 docker compose logs -f notify | grep fake_sent
 ```
 
-Read the Alert's Notification history, newest day first (for the next page, pass
-`before=<the last day received>`):
+Each `notifications.fake_sent` line is one Message. The `text` field is the Message as Ana reads
+it, for example:
+
+```text
+Weather alert
+- Lote 1: frost on Sat 2026-11-14, 80% chance (your threshold: 10%)
+- Lote 1: frost on Mon 2026-11-16, 35% chance (your threshold: 10%)
+```
+
+In the log, `\n` shows each line break. The `notifications` field has the same data as separate
+values.
+
+If no line appears, no Forecast reached the Threshold. Use step 4 to make sure.
+
+### 4. Read the Notification history
 
 ```bash
 curl -s "$API/alerts/$ALERT_ID/notifications?limit=3" -H "$KEY" | jq
 ```
 
-The fake sender rejects phone numbers ending in `0000`: repeat the steps with
-`"phone_number": "+5491100000000"` and that User's Notifications end up `failed` after one attempt,
-with `notifications.send_rejected` in the `notify` logs.
+The API returns the Notifications of the Alert, newest day first. Each Notification shows its
+`status`:
 
-Check the workers' health and last runs:
+- `pending`: not delivered yet. `notify` tries again later.
+- `sent`: delivered in a Message.
+- `failed`: the sender rejected the Message permanently. `notify` does not try again.
+- `expired`: the day passed before delivery.
+
+To get the next page, set `before` to the last `day` that you received.
+
+### 5. See a failed delivery
+
+The fake sender rejects all phone numbers that end in `0000`. To see this, do steps 1 and 2 again
+with `"phone_number": "+5491100000000"`. Step 3 shows no `fake_sent` line for this User, because
+no Message is sent. Instead, the `notify` log shows the rejection:
+
+```bash
+docker compose logs notify | grep send_rejected
+```
+
+In step 4, each Notification of the new Alert shows `"status": "failed"` and `"attempts": 1`.
+`notify` does not try again.
+
+### 6. Check the workers
+
+Each worker records each run in the `job_runs` table. The healthcheck reads this table.
 
 ```bash
 docker compose ps                                  # each worker shows (healthy)
