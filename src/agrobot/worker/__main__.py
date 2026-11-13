@@ -3,7 +3,6 @@ import asyncio
 import signal
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import NamedTuple
 
@@ -16,7 +15,7 @@ from agrobot.forecasts.provider import FakeWeatherProvider
 from agrobot.forecasts.service import ingest
 from agrobot.notifications.sender import FakeNotificationSender
 from agrobot.notifications.service import evaluate, notify
-from agrobot.worker import repository as job_runs
+from agrobot.worker import service as job_runs
 from agrobot.worker.runner import Job, PeriodicRunner
 
 JobFactory = Callable[[Settings, async_sessionmaker[AsyncSession]], Job]
@@ -88,14 +87,17 @@ def parse_command(argv: Sequence[str] | None = None, jobs: Jobs = JOBS) -> Comma
 
 async def check(job: str, settings: Settings, jobs: Jobs = JOBS) -> bool:
     spec = jobs[job]
-    max_age = timedelta(seconds=3 * max(spec.interval(settings), spec.time_limit(settings)))
     engine = create_engine(settings)
     try:
         async with create_session_factory(engine)() as session:
-            last_succeeded_at = await job_runs.last_succeeded_at(session, job)
+            return await job_runs.is_healthy(
+                session,
+                job,
+                interval_seconds=spec.interval(settings),
+                time_limit_seconds=spec.time_limit(settings),
+            )
     finally:
         await engine.dispose()
-    return last_succeeded_at is not None and datetime.now(UTC) - last_succeeded_at <= max_age
 
 
 async def main(job: str, settings: Settings, jobs: Jobs = JOBS) -> None:

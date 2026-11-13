@@ -14,7 +14,7 @@ from agrobot.core.config import Settings, get_settings
 from agrobot.forecasts.service import ingest
 from agrobot.notifications.sender import FakeNotificationSender
 from agrobot.notifications.service import evaluate, notify
-from agrobot.worker import repository as job_runs
+from agrobot.worker import service as job_runs
 from agrobot.worker.__main__ import JOBS, Command, Jobs, JobSpec, check, main, parse_command
 from agrobot.worker.models import JobOutcome, JobRun
 from agrobot.worker.runner import Job, PeriodicRunner
@@ -135,7 +135,7 @@ def test_unknown_or_missing_job_fails(argv: list[str]) -> None:
 
 
 FAKE_JOBS: Jobs = {"fake": JobSpec(lambda *_: _no_counters, lambda _: 60, lambda _: 100)}
-STALE_AFTER = timedelta(seconds=300)
+STALE_AFTER = timedelta(seconds=job_runs.STALE_AFTER_RUNS * 100)
 
 
 async def _no_counters() -> dict[str, int]:

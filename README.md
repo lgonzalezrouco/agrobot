@@ -23,8 +23,8 @@ Compose the workers run every minute or less so alerts show up quickly, and each
 healthy while its job keeps succeeding (`docker compose ps`). If port 8000 or 5432 is taken, set
 `API_PORT` or `POSTGRES_PORT`.
 
-Compose fixes every other setting, so a local `.env` does not change it. To override one, create
-a `compose.override.yaml` next to `compose.yaml`; Compose merges it automatically:
+To change any other setting, create a `compose.override.yaml` next to `compose.yaml`; Compose
+merges it automatically:
 
 ```yaml
 services:
