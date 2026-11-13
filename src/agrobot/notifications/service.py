@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import enum
 import uuid
@@ -112,7 +114,7 @@ async def notify(
         )
         await session.commit()
 
-    async def deliver(message: Message, today: date) -> None:
+    async def deliver(message: Message, today: date) -> datetime | None:
         ids = [claim.notification.id for claim in message.claims]
         contents = [claim.content for claim in message.claims if claim.content.day >= today]
         delivery = Outcome.EXPIRED
@@ -149,12 +151,27 @@ async def notify(
         except SQLAlchemyError:
             logger.exception("notifications.record_failed", notification_ids=ids)
             outcomes["errors"] += 1
-            return
+            return None
         outcomes.update(recorded)
+        return retry_at if delivery == Outcome.RETRIED else None
+
+    async def defer(messages: list[Message], retry_at: datetime) -> None:
+        ids = [claim.notification.id for message in messages for claim in message.claims]
+        try:
+            async with session_factory() as session:
+                for notification in await repository.lock_pending(session, ids):
+                    notification.defer(retry_at)
+                await session.commit()
+        except SQLAlchemyError:
+            logger.exception("notifications.defer_failed", notification_ids=ids)
+            outcomes["errors"] += 1
 
     async def deliver_in_order(messages: list[Message], today: date) -> None:
-        for message in messages:
-            await deliver(message, today)
+        for index, message in enumerate(messages):
+            retry_at = await deliver(message, today)
+            if retry_at is not None and index + 1 < len(messages):
+                await defer(messages[index + 1 :], retry_at)
+                return
 
     while True:
         async with session_factory() as session:

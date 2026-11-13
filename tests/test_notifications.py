@@ -728,6 +728,68 @@ async def test_more_than_20_pending_notifications_go_out_in_several_messages_ear
     ]
 
 
+async def test_after_a_failed_message_the_users_later_messages_wait_for_the_same_retry(
+    committed_session_factory: SessionFactory,
+) -> None:
+    later = await _create_alert(committed_session_factory, threshold=50)
+    earlier = await _add_alert(
+        committed_session_factory,
+        later,
+        field_name="Broken",
+        weather_event_type=WeatherEventType.RAIN,
+    )
+    await _add_pending(committed_session_factory, earlier, *range(20))
+    await _add_pending(committed_session_factory, later, *range(20, 25))
+    sender = StubNotificationSender()
+    sender.failing.add("Broken")
+
+    await _notify(committed_session_factory, sender)
+
+    async with committed_session_factory() as session:
+        failed = await _notifications_by_day(session, earlier.id)
+        waiting = await _notifications_by_day(session, later.id)
+    assert sender.messages == []
+    assert {(n.status, n.attempts, n.leased_until) for n in waiting} == {
+        (NotificationStatus.PENDING, 0, None)
+    }
+    assert {n.next_attempt_at for n in waiting} == {failed[0].next_attempt_at}
+
+
+async def test_database_error_deferring_later_messages_leaves_them_to_their_lease(
+    committed_session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    later = await _create_alert(committed_session_factory, threshold=50)
+    earlier = await _add_alert(
+        committed_session_factory,
+        later,
+        field_name="Broken",
+        weather_event_type=WeatherEventType.RAIN,
+    )
+    await _add_pending(committed_session_factory, earlier, *range(20))
+    await _add_pending(committed_session_factory, later, *range(20, 25))
+    async with committed_session_factory() as session:
+        later_ids = {n.id for n in await _notifications_by_day(session, later.id)}
+    lock_pending = repository.lock_pending
+
+    async def lock_pending_failing_for_later(session: AsyncSession, ids: Any) -> Any:
+        if later_ids & set(ids):
+            raise OperationalError("SELECT notifications", {}, ConnectionError("lost"))
+        return await lock_pending(session, ids)
+
+    monkeypatch.setattr(repository, "lock_pending", lock_pending_failing_for_later)
+    sender = StubNotificationSender()
+    sender.failing.add("Broken")
+
+    with structlog.testing.capture_logs() as logs:
+        await _notify(committed_session_factory, sender)
+
+    async with committed_session_factory() as session:
+        waiting = await _notifications_by_day(session, later.id)
+    assert sender.messages == []
+    assert all(n.leased_until is not None and n.attempts == 0 for n in waiting)
+    assert any(log.get("event") == "notifications.notified" and log["errors"] == 1 for log in logs)
+
+
 async def test_backlog_larger_than_a_batch_is_fully_sent_in_one_run_earliest_day_first(
     committed_session_factory: SessionFactory,
 ) -> None:

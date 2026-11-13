@@ -4,11 +4,13 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agrobot.core.schemas import Name
+
 E164PhoneNumber = Annotated[str, Field(pattern=r"^\+[1-9]\d{1,14}$")]
 
 
 class UserCreate(BaseModel):
-    name: Annotated[str, Field(min_length=1, max_length=200)]
+    name: Name
     phone_number: E164PhoneNumber
 
 

@@ -3,6 +3,19 @@
 Weather alert system: a REST API and background workers on PostgreSQL. The original task statement
 (in Spanish) is in [`docs/TASK.md`](docs/TASK.md).
 
+## How it works
+
+```text
+ingest    Weather Provider → Forecasts for every Location with Fields, 7 days ahead
+evaluate  Alerts × Forecasts → one Notification per Alert and day that reaches the Threshold
+notify    pending Notifications → Messages grouping each User's Notifications (up to 20)
+API       Users, Fields, Alerts and each Alert's Notification history
+```
+
+Each job runs in its own worker process, and they share only Postgres. Leases, retries with
+backoff, expiry and the `job_runs` healthcheck let delivery survive crashes, sender outages and
+several `notify` replicas.
+
 ## Run it
 
 Requires Docker. No `.env` is needed.

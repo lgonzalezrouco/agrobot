@@ -28,6 +28,14 @@ async def test_register_user_rejects_non_e164_phone_number(
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
+async def test_register_user_rejects_nul_in_name(client: AsyncClient) -> None:
+    response = await client.post(
+        "/users", json={"name": "A\u0000na", "phone_number": "+5491122334455"}
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
 async def test_register_user_rejects_taken_phone_number(client: AsyncClient) -> None:
     await client.post("/users", json={"name": "Ana", "phone_number": "+5491122334455"})
 

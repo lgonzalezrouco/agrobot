@@ -5,9 +5,8 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict
 from pydantic import Field as PydanticField
 
-from agrobot.core.schemas import PatchModel
+from agrobot.core.schemas import Name, PatchModel
 
-Name = Annotated[str, PydanticField(min_length=1, max_length=200)]
 Latitude = Annotated[float, PydanticField(ge=-90, le=90)]
 Longitude = Annotated[float, PydanticField(ge=-180, le=180)]
 
