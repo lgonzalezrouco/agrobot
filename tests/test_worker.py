@@ -21,7 +21,9 @@ from agrobot.worker.runner import Job, PeriodicRunner
 from tests.conftest import TIMEZONE
 
 REQUIRED_SETTINGS = {"database_url": "postgresql+asyncpg://unused/unused"}
-SETTINGS = Settings.model_validate({**REQUIRED_SETTINGS, "log_level": "WARNING"})
+SETTINGS = Settings(
+    database_url=REQUIRED_SETTINGS["database_url"], log_level="WARNING", _env_file=None
+)
 
 
 def _runner(
