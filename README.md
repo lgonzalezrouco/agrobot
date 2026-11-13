@@ -38,7 +38,7 @@ services:
 With the stack from `docker compose up --build` running, in another terminal (needs `jq`):
 
 ```bash
-API=localhost:8000; KEY='X-API-Key: dev-api-key'; JSON='Content-Type: application/json'
+API=localhost:${API_PORT:-8000}; KEY='X-API-Key: dev-api-key'; JSON='Content-Type: application/json'
 
 USER_ID=$(curl -s -X POST $API/users -H "$KEY" -H "$JSON" \
   -d '{"name": "Ana", "phone_number": "+5491112345678"}' | jq -r .id)
