@@ -4,6 +4,7 @@ Forecasts are issued per **Location**, a point on a fixed grid with a 0.1° step
 
 ## Considered Options
 
+- **Forecasts per Field, with no Location.** Rejected: ingestion would make one provider call per field instead of per point, neighboring fields could get different forecasts for the same place, and ingestion cost would grow with the number of fields instead of the area they cover.
 - **Proximity search at evaluation time** (find the forecast nearest the field on every run). Rejected: it needs PostGIS or unindexable distance math in SQL and a maximum distance, and alerts with no forecast in range fail silently.
 - **Rounded coordinates repeated on fields and forecasts, with no Location table.** Rejected: the relationship would be implicit, and ingestion would have to derive its list of points.
 - **A finer grid (0.01°).** Rejected: finer than real forecast models, so it multiplies provider calls without adding information.
